@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>PHOTOSYNC</title>
   <style>
-    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0f1115;color:#f5f7fa}header{padding:20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #252a33}h1{margin:0;font-size:22px}.status{font-size:13px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#777;margin-right:7px}.online .dot{background:#36d399}.grid{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.card{background:#181c23;border:1px solid #292f39;border-radius:14px;overflow:hidden;cursor:pointer}.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block}.meta{padding:10px;font-size:12px;color:#aab2bf}.empty{padding:50px 20px;text-align:center;color:#8d96a5}.viewer{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;padding:24px;z-index:10}.viewer.open{display:flex}.viewer img{max-width:95vw;max-height:90vh;object-fit:contain;border-radius:8px}.close{position:fixed;top:16px;right:20px;border:0;background:rgba(255,255,255,.12);color:#fff;font-size:30px;width:44px;height:44px;border-radius:50%;cursor:pointer}
+    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0f1115;color:#f5f7fa}header{padding:20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #252a33}h1{margin:0;font-size:22px}.status{font-size:13px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#777;margin-right:7px}.online .dot{background:#36d399}.grid{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.card{background:#181c23;border:1px solid #292f39;border-radius:14px;overflow:hidden;cursor:pointer}.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block}.meta{padding:10px;font-size:12px;color:#aab2bf}.empty{padding:50px 20px;text-align:center;color:#8d96a5}.viewer{position:fixed;inset:0;background:rgba(0,0,0,.9);display:none;align-items:center;justify-content:center;padding:24px;z-index:10;overflow:hidden}.viewer.open{display:flex}.viewer img{max-width:95vw;max-height:88vh;object-fit:contain;border-radius:8px;transform-origin:center;user-select:none;touch-action:none;cursor:grab}.viewer img.dragging{cursor:grabbing}.close,.zoomBtn{position:fixed;border:0;background:rgba(255,255,255,.12);color:#fff;cursor:pointer;z-index:11}.close{top:16px;right:20px;font-size:30px;width:44px;height:44px;border-radius:50%}.controls{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);display:flex;gap:8px;background:rgba(20,20,20,.8);padding:8px;border-radius:14px;z-index:11}.zoomBtn{position:static;font-size:22px;width:44px;height:40px;border-radius:9px}.zoomLevel{min-width:60px;text-align:center;line-height:40px;font-size:13px;color:#ddd}
   </style>
 </head>
 <body>
@@ -16,7 +16,13 @@
   <main id="gallery" class="grid"><div class="empty">Waiting for photos…</div></main>
   <div id="viewer" class="viewer" role="dialog" aria-modal="true">
     <button id="closeViewer" class="close" aria-label="Close">×</button>
-    <img id="viewerImage" alt="Full-size photo">
+    <img id="viewerImage" alt="Full-size photo" draggable="false">
+    <div class="controls">
+      <button id="zoomOut" class="zoomBtn" aria-label="Zoom out">−</button>
+      <div id="zoomLevel" class="zoomLevel">100%</div>
+      <button id="zoomIn" class="zoomBtn" aria-label="Zoom in">+</button>
+      <button id="zoomReset" class="zoomBtn" aria-label="Reset zoom">↺</button>
+    </div>
   </div>
 <script>
 const gallery=document.getElementById('gallery');
@@ -24,20 +30,33 @@ const status=document.getElementById('status');
 const viewer=document.getElementById('viewer');
 const viewerImage=document.getElementById('viewerImage');
 const closeViewer=document.getElementById('closeViewer');
+const zoomInBtn=document.getElementById('zoomIn');
+const zoomOutBtn=document.getElementById('zoomOut');
+const zoomResetBtn=document.getElementById('zoomReset');
+const zoomLevel=document.getElementById('zoomLevel');
 const wsProtocol=location.protocol==='https:'?'wss':'ws';
 const wsUrl=`${wsProtocol}://${location.host}/ws`;
-function openPhoto(url){viewerImage.src=new URL(url,location.href).href;viewer.classList.add('open');}
+let scale=1, posX=0, posY=0, dragging=false, startX=0, startY=0, startPosX=0, startPosY=0;
+function applyTransform(){viewerImage.style.transform=`translate(${posX}px,${posY}px) scale(${scale})`;zoomLevel.textContent=Math.round(scale*100)+'%';}
+function setZoom(next){scale=Math.min(5,Math.max(.25,next));if(scale<=1){posX=0;posY=0;}applyTransform();}
+function openPhoto(url){viewerImage.src=new URL(url,location.href).href;scale=1;posX=0;posY=0;applyTransform();viewer.classList.add('open');}
 function closePhoto(){viewer.classList.remove('open');viewerImage.src='';}
 closeViewer.onclick=closePhoto;
 viewer.onclick=e=>{if(e.target===viewer)closePhoto();};
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closePhoto();});
+zoomInBtn.onclick=()=>setZoom(scale+.25);
+zoomOutBtn.onclick=()=>setZoom(scale-.25);
+zoomResetBtn.onclick=()=>setZoom(1);
+viewerImage.addEventListener('wheel',e=>{e.preventDefault();setZoom(scale+(e.deltaY<0?.2:-.2));},{passive:false});
+viewerImage.addEventListener('pointerdown',e=>{if(scale<=1)return;dragging=true;viewerImage.classList.add('dragging');startX=e.clientX;startY=e.clientY;startPosX=posX;startPosY=posY;viewerImage.setPointerCapture(e.pointerId);});
+viewerImage.addEventListener('pointermove',e=>{if(!dragging)return;posX=startPosX+e.clientX-startX;posY=startPosY+e.clientY-startY;applyTransform();});
+viewerImage.addEventListener('pointerup',()=>{dragging=false;viewerImage.classList.remove('dragging');});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closePhoto();if(!viewer.classList.contains('open'))return;if(e.key==='+'||e.key==='=')setZoom(scale+.25);if(e.key==='-')setZoom(scale-.25);if(e.key==='0')setZoom(1);});
 function showPhoto(data){
   if(gallery.querySelector('.empty')) gallery.innerHTML='';
-  const card=document.createElement('article'); card.className='card';
-  const img=document.createElement('img'); img.src=new URL(data.url,location.href).href; img.alt='Synced photo'; img.loading='lazy';
-  const meta=document.createElement('div'); meta.className='meta'; meta.textContent=new Date().toLocaleString();
-  card.onclick=()=>openPhoto(img.src);
-  card.append(img,meta); gallery.prepend(card);
+  const card=document.createElement('article');card.className='card';
+  const img=document.createElement('img');img.src=new URL(data.url,location.href).href;img.alt='Synced photo';img.loading='lazy';
+  const meta=document.createElement('div');meta.className='meta';meta.textContent=new Date().toLocaleString();
+  card.onclick=()=>openPhoto(img.src);card.append(img,meta);gallery.prepend(card);
 }
 function connect(){
   const ws=new WebSocket(wsUrl);
