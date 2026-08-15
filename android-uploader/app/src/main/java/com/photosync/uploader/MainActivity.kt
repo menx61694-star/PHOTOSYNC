@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Preserve original pixel dimensions while reducing JPEG file size at 95% quality.
     private fun compressPhoto(uri: Uri): File {
         val bitmap = contentResolver.openInputStream(uri).use { input ->
             requireNotNull(input) { "Unable to open image" }
