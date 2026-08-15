@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PHOTOSYNC</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0f1115;color:#f5f7fa}header{padding:20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #252a33}h1{margin:0;font-size:22px}.status{font-size:13px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#777;margin-right:7px}.online .dot{background:#36d399}.grid{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.card{background:#181c23;border:1px solid #292f39;border-radius:14px;overflow:hidden}.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block}.meta{padding:10px;font-size:12px;color:#aab2bf}.empty{padding:50px 20px;text-align:center;color:#8d96a5}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PHOTOSYNC</h1>
+    <div id="status" class="status"><span class="dot"></span>Connecting…</div>
+  </header>
+  <main id="gallery" class="grid"><div class="empty">Waiting for photos…</div></main>
+<script>
+const gallery=document.getElementById('gallery');
+const status=document.getElementById('status');
+const wsProtocol=location.protocol==='https:'?'wss':'ws';
+const wsUrl=`${wsProtocol}://${location.host}/ws`;
+function showPhoto(data){
+  if(gallery.querySelector('.empty')) gallery.innerHTML='';
+  const card=document.createElement('article'); card.className='card';
+  const img=document.createElement('img'); img.src=data.url; img.alt='Synced photo'; img.loading='lazy';
+  const meta=document.createElement('div'); meta.className='meta'; meta.textContent=new Date().toLocaleString();
+  card.append(img,meta); gallery.prepend(card);
+}
+function connect(){
+  const ws=new WebSocket(wsUrl);
+  ws.onopen=()=>{status.classList.add('online');status.innerHTML='<span class="dot"></span>Connected';};
+  ws.onmessage=e=>{try{const data=JSON.parse(e.data);if(data.type==='photo_uploaded')showPhoto(data)}catch{}};
+  ws.onclose=()=>{status.classList.remove('online');status.innerHTML='<span class="dot"></span>Reconnecting…';setTimeout(connect,1500)};
+  ws.onerror=()=>ws.close();
+}
+connect();
+</script>
+</body>
+</html>
