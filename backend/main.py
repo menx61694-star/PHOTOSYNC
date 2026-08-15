@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
+WEB_DIR = BASE_DIR.parent / "web"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -22,6 +23,7 @@ app.add_middleware(
 )
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
 
 
 class ConnectionManager:
@@ -47,6 +49,11 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"dashboard": "/dashboard/", "health": "/health"}
 
 
 @app.get("/health")
