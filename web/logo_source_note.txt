@@ -1,0 +1,1 @@
+The supplied web logo Base64 is attached in the conversation. It is a JPEG Base64 payload and is intended for the PHOTOSYNC web logo/favicon.
