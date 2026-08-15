@@ -1,5 +1,7 @@
 package com.photosync.uploader
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Button
@@ -48,6 +50,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun compressPhoto(uri: Uri): File {
+        val bitmap = contentResolver.openInputStream(uri).use { input ->
+            requireNotNull(input) { "Unable to open image" }
+            BitmapFactory.decodeStream(input) ?: error("Unable to decode image")
+        }
+
+        val compressed = File(cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+        compressed.outputStream().use { output ->
+            check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)) {
+                "Unable to compress image"
+            }
+        }
+        bitmap.recycle()
+        return compressed
+    }
+
     private fun upload(uri: Uri) {
         val serverUrl = prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))
             ?.trim()?.removeSuffix("/") ?: return
@@ -56,15 +74,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        status.text = "Uploading…"
+        status.text = "Compressing…"
         Thread {
+            var file: File? = null
             try {
-                val file = File(cacheDir, "photo_${System.currentTimeMillis()}.jpg")
-                contentResolver.openInputStream(uri).use { input ->
-                    requireNotNull(input) { "Unable to open image" }
-                    file.outputStream().use { output -> input.copyTo(output) }
-                }
-
+                file = compressPhoto(uri)
                 val body = file.asRequestBody("image/jpeg".toMediaType())
                 val multipart = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
@@ -76,13 +90,15 @@ class MainActivity : AppCompatActivity() {
                     .post(multipart)
                     .build()
 
+                runOnUiThread { status.text = "Uploading…" }
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
                     runOnUiThread { status.text = "Uploaded ✓" }
                 }
-                file.delete()
             } catch (e: Exception) {
                 runOnUiThread { status.text = "Upload failed: ${e.message}" }
+            } finally {
+                file?.delete()
             }
         }.start()
     }
