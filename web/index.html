@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>PHOTOSYNC</title>
   <style>
-    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0f1115;color:#f5f7fa}header{padding:20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #252a33}h1{margin:0;font-size:22px}.status{font-size:13px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#777;margin-right:7px}.online .dot{background:#36d399}.grid{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.card{background:#181c23;border:1px solid #292f39;border-radius:14px;overflow:hidden}.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block}.meta{padding:10px;font-size:12px;color:#aab2bf}.empty{padding:50px 20px;text-align:center;color:#8d96a5}
+    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0f1115;color:#f5f7fa}header{padding:20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #252a33}h1{margin:0;font-size:22px}.status{font-size:13px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#777;margin-right:7px}.online .dot{background:#36d399}.grid{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.card{background:#181c23;border:1px solid #292f39;border-radius:14px;overflow:hidden;cursor:pointer}.card img{width:100%;aspect-ratio:1;object-fit:cover;display:block}.meta{padding:10px;font-size:12px;color:#aab2bf}.empty{padding:50px 20px;text-align:center;color:#8d96a5}.viewer{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;padding:24px;z-index:10}.viewer.open{display:flex}.viewer img{max-width:95vw;max-height:90vh;object-fit:contain;border-radius:8px}.close{position:fixed;top:16px;right:20px;border:0;background:rgba(255,255,255,.12);color:#fff;font-size:30px;width:44px;height:44px;border-radius:50%;cursor:pointer}
   </style>
 </head>
 <body>
@@ -14,16 +14,29 @@
     <div id="status" class="status"><span class="dot"></span>Connecting…</div>
   </header>
   <main id="gallery" class="grid"><div class="empty">Waiting for photos…</div></main>
+  <div id="viewer" class="viewer" role="dialog" aria-modal="true">
+    <button id="closeViewer" class="close" aria-label="Close">×</button>
+    <img id="viewerImage" alt="Full-size photo">
+  </div>
 <script>
 const gallery=document.getElementById('gallery');
 const status=document.getElementById('status');
+const viewer=document.getElementById('viewer');
+const viewerImage=document.getElementById('viewerImage');
+const closeViewer=document.getElementById('closeViewer');
 const wsProtocol=location.protocol==='https:'?'wss':'ws';
 const wsUrl=`${wsProtocol}://${location.host}/ws`;
+function openPhoto(url){viewerImage.src=new URL(url,location.href).href;viewer.classList.add('open');}
+function closePhoto(){viewer.classList.remove('open');viewerImage.src='';}
+closeViewer.onclick=closePhoto;
+viewer.onclick=e=>{if(e.target===viewer)closePhoto();};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closePhoto();});
 function showPhoto(data){
   if(gallery.querySelector('.empty')) gallery.innerHTML='';
   const card=document.createElement('article'); card.className='card';
-  const img=document.createElement('img'); img.src=data.url; img.alt='Synced photo'; img.loading='lazy';
+  const img=document.createElement('img'); img.src=new URL(data.url,location.href).href; img.alt='Synced photo'; img.loading='lazy';
   const meta=document.createElement('div'); meta.className='meta'; meta.textContent=new Date().toLocaleString();
+  card.onclick=()=>openPhoto(img.src);
   card.append(img,meta); gallery.prepend(card);
 }
 function connect(){
