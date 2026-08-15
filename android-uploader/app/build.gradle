@@ -3,6 +3,18 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// Decode the supplied app-icon Base64 into a generated Android drawable at build time.
+def generatedIconDir = file("$buildDir/generated/res/photosyncIcon/drawable")
+tasks.register("generatePhotoSyncIcon") {
+    inputs.file("src/main/app_icon_base64.txt")
+    outputs.file(new File(generatedIconDir, "app_icon.jpg"))
+    doLast {
+        generatedIconDir.mkdirs()
+        def encoded = file("src/main/app_icon_base64.txt").getText("UTF-8").trim()
+        new File(generatedIconDir, "app_icon.jpg").bytes = java.util.Base64.decoder.decode(encoded)
+    }
+}
+
 android {
     namespace 'com.photosync.uploader'
     compileSdk 35
@@ -11,8 +23,12 @@ android {
         applicationId 'com.photosync.uploader'
         minSdk 23
         targetSdk 35
-        versionCode 2
-        versionName '0.2.0'
+        versionCode 3
+        versionName '0.3.0'
+    }
+
+    sourceSets {
+        main.res.srcDir(generatedIconDir)
     }
 
     compileOptions {
@@ -23,6 +39,10 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("generatePhotoSyncIcon")
 }
 
 dependencies {
