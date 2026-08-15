@@ -3,6 +3,7 @@ package com.photosync.uploader
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -16,9 +17,9 @@ import java.io.File
 class MainActivity : AppCompatActivity() {
     private val client = OkHttpClient()
     private lateinit var status: TextView
+    private lateinit var serverUrlInput: EditText
 
-    // Change this to the address of the PHOTOSYNC FastAPI server.
-    private val serverUrl = "http://10.0.2.2:8000"
+    private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
 
     private val picker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) upload(uri)
@@ -27,13 +28,34 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
         status = findViewById(R.id.statusText)
+        serverUrlInput = findViewById(R.id.serverUrlInput)
+        serverUrlInput.setText(prefs.getString("server_url", "http://10.0.2.2:8000"))
+
+        findViewById<Button>(R.id.saveServerButton).setOnClickListener {
+            val url = serverUrlInput.text.toString().trim().removeSuffix("/")
+            if (url.isBlank()) {
+                status.text = "Enter a server URL"
+                return@setOnClickListener
+            }
+            prefs.edit().putString("server_url", url).apply()
+            status.text = "Server saved ✓"
+        }
+
         findViewById<Button>(R.id.selectButton).setOnClickListener {
             picker.launch("image/*")
         }
     }
 
     private fun upload(uri: Uri) {
+        val serverUrl = prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))
+            ?.trim()?.removeSuffix("/") ?: return
+        if (serverUrl.isBlank()) {
+            runOnUiThread { status.text = "Set server URL first" }
+            return
+        }
+
         status.text = "Uploading…"
         Thread {
             try {
