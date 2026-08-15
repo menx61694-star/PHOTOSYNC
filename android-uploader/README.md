@@ -1,20 +1,17 @@
-# PHOTOSYNC Android Uploader
+# PHOTOSYNC Android uploader
 
-Minimal Android uploader contract:
+## Build
 
-1. Pick an image from the device gallery.
-2. Build a `multipart/form-data` request with field name `file`.
-3. POST it to the PHOTOSYNC backend `/upload` endpoint.
-4. The backend saves the image and broadcasts `photo_uploaded` over WebSocket.
+Open `android-uploader` as an Android Studio project and let Gradle sync. Build the debug APK with:
 
-Example request:
-
-```text
-POST /upload
-Content-Type: multipart/form-data
-file=<image bytes>
+```bash
+./gradlew :app:assembleDebug
 ```
 
-The Android client should keep the backend URL configurable rather than hard-coding a public server address.
+The generated APK is under `app/build/outputs/apk/debug/`.
 
-Security note: do not expose the current prototype directly to the public internet. Add authentication and HTTPS before doing so.
+## Server URL
+
+`MainActivity.kt` currently uses `http://10.0.2.2:8000`, which is the Android Emulator alias for the host machine. For a physical phone, replace it with the reachable IP address of the machine running PHOTOSYNC, for example `http://192.168.1.10:8000`.
+
+The current prototype is intended for local testing. Do not expose it publicly until authentication and HTTPS are implemented.
