@@ -11,6 +11,14 @@
         android:layout_height="wrap_content"
         android:text="PHOTOSYNC"
         android:textSize="18sp"
+        android:paddingBottom="8dp" />
+
+    <TextView
+        android:id="@+id/serverStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="● Server: Checking…"
+        android:textSize="14sp"
         android:paddingBottom="16dp" />
 
     <EditText
