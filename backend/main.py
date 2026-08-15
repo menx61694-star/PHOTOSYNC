@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -24,9 +24,44 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
+class ConnectionManager:
+    def __init__(self) -> None:
+        self.connections: set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self.connections.add(websocket)
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        self.connections.discard(websocket)
+
+    async def broadcast(self, message: dict[str, str]) -> None:
+        dead: list[WebSocket] = []
+        for connection in self.connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                dead.append(connection)
+        for connection in dead:
+            self.disconnect(connection)
+
+
+manager = ConnectionManager()
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket) -> None:
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 
 @app.post("/upload")
@@ -46,4 +81,7 @@ async def upload_photo(file: UploadFile = File(...)) -> dict[str, str]:
         while chunk := await file.read(1024 * 1024):
             output.write(chunk)
 
-    return {"filename": filename, "url": f"/uploads/{filename}"}
+    image_url = f"/uploads/{filename}"
+    await manager.broadcast({"type": "photo_uploaded", "filename": filename, "url": image_url})
+
+    return {"filename": filename, "url": image_url}
