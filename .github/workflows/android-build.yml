@@ -41,3 +41,5 @@ jobs:
         with:
           name: photosync-debug-apk
           path: android-uploader/app/build/outputs/apk/debug/*.apk
+
+# Trigger refresh for Android build verification
