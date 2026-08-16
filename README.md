@@ -1,2 +1,2 @@
 # PHOTOSYNC
-RUN FOR ME
+sync image seemlessly
