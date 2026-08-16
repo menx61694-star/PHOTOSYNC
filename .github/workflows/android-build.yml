@@ -9,6 +9,7 @@ on:
     paths:
       - 'android-uploader/**'
       - '.github/workflows/android-build.yml'
+  workflow_dispatch:
 
 jobs:
   build:
