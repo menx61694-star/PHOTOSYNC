@@ -65,3 +65,5 @@ jobs:
           name: photosync-debug-apk
           path: android-uploader/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+# Keep this workflow tied to the current Android UI build.
