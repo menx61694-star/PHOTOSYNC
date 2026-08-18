@@ -2,13 +2,11 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="24dp">
-
         <TextView
             android:id="@+id/statusText"
             android:layout_width="match_parent"
@@ -16,7 +14,6 @@
             android:text="PHOTOSYNC"
             android:textSize="18sp"
             android:paddingBottom="8dp" />
-
         <TextView
             android:id="@+id/serverStatusText"
             android:layout_width="match_parent"
@@ -24,7 +21,6 @@
             android:text="● Server: Checking…"
             android:textSize="14sp"
             android:paddingBottom="16dp" />
-
         <EditText
             android:id="@+id/serverUrlInput"
             android:layout_width="match_parent"
@@ -32,19 +28,28 @@
             android:hint="Server URL (e.g. http://192.168.1.10:8000)"
             android:inputType="textUri"
             android:singleLine="true" />
-
         <Button
             android:id="@+id/saveServerButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Save Server" />
-
         <Button
             android:id="@+id/selectButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Select Files" />
-
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Sent Files"
+            android:textSize="18sp"
+            android:paddingTop="22dp"
+            android:paddingBottom="8dp" />
+        <LinearLayout
+            android:id="@+id/sentFilesContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -52,12 +57,10 @@
             android:textSize="18sp"
             android:paddingTop="22dp"
             android:paddingBottom="8dp" />
-
         <LinearLayout
             android:id="@+id/receivedFilesContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical" />
-
     </LinearLayout>
 </ScrollView>
