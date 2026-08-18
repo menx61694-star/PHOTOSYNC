@@ -13,36 +13,43 @@
             android:layout_height="wrap_content"
             android:text="PHOTOSYNC"
             android:textSize="18sp"
+            android:textStyle="bold"
             android:paddingBottom="8dp" />
         <TextView
             android:id="@+id/serverStatusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="● Server: Checking…"
+            android:text="● Server: Searching LAN…"
             android:textSize="14sp"
-            android:paddingBottom="16dp" />
+            android:paddingBottom="12dp" />
+        <Button
+            android:id="@+id/findServerButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Find Server Automatically" />
         <EditText
             android:id="@+id/serverUrlInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Server URL (e.g. http://192.168.1.10:8000)"
+            android:hint="Manual server URL (optional)"
             android:inputType="textUri"
             android:singleLine="true" />
         <Button
             android:id="@+id/saveServerButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Save Server" />
+            android:text="Use / Save Manual Server" />
         <Button
             android:id="@+id/selectButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Select Files" />
+            android:text="Send Files" />
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Sent Files"
             android:textSize="18sp"
+            android:textStyle="bold"
             android:paddingTop="22dp"
             android:paddingBottom="8dp" />
         <LinearLayout
@@ -55,6 +62,7 @@
             android:layout_height="wrap_content"
             android:text="Received Files"
             android:textSize="18sp"
+            android:textStyle="bold"
             android:paddingTop="22dp"
             android:paddingBottom="8dp" />
         <LinearLayout
