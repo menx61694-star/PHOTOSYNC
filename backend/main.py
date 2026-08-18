@@ -57,6 +57,7 @@ def files(source: str | None = None):
     items = [p for p in UPLOAD_DIR.iterdir() if p.is_file() and not p.name.startswith(".")]
     items.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     result = [file_info(p) for p in items]
+    if source == "received": return [x for x in result if x["source"] in {"web", "unknown"}]
     return [x for x in result if not source or x["source"] == source]
 @app.get("/photos")
 def photos(): return [x for x in files() if x["type"] == "image"]
