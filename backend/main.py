@@ -1,6 +1,9 @@
 from pathlib import Path
 from uuid import uuid4
 import re
+import json
+import socket
+import threading
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +14,11 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 WEB_DIR = BASE_DIR.parent / "web"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="PHOTOSYNC API", version="0.4.0")
+APP_PORT = 8000
+DISCOVERY_PORT = 8001
+DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
+
+app = FastAPI(title="PHOTOSYNC API", version="0.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
@@ -49,7 +56,7 @@ def file_info(path: Path) -> dict:
     return {"filename": original, "stored_filename": stored, "url": f"/uploads/{stored}", "size": path.stat().st_size, "type": "image" if image else "file", "source": source}
 
 @app.get("/")
-def root(): return {"dashboard":"/dashboard/", "health":"/health", "files":"/files"}
+def root(): return {"dashboard":"/dashboard/", "health":"/health", "files":"/files", "discovery_port":DISCOVERY_PORT}
 @app.get("/health")
 def health(): return {"status":"ok"}
 @app.get("/files")
@@ -81,3 +88,22 @@ async def upload_file(file: UploadFile = File(...), source: str = Form("unknown"
     info["content_type"] = file.content_type or "application/octet-stream"
     await manager.broadcast({"type":"file_uploaded", **info})
     return info
+
+def discovery_loop():
+    """Small UDP LAN discovery responder; no cloud service or IP scanning required."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", DISCOVERY_PORT))
+        while True:
+            data, addr = sock.recvfrom(1024)
+            if data.decode("utf-8", errors="ignore").strip() != DISCOVERY_TOKEN:
+                continue
+            payload = json.dumps({"service":"PHOTOSYNC", "version":1, "port":APP_PORT}).encode("utf-8")
+            sock.sendto(payload, addr)
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+threading.Thread(target=discovery_loop, name="photosync-discovery", daemon=True).start()
