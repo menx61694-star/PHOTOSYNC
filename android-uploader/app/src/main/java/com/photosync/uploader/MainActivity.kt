@@ -4,8 +4,8 @@ package com.photosync.uploader
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.net.DhcpInfo
 import android.net.Uri
-import android.net.wifi.DhcpInfo
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Environment
