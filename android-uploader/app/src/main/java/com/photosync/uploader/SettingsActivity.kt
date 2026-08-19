@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -15,12 +16,14 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val scroll = ScrollView(this)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(38), dp(24), dp(38), dp(24))
             setBackgroundColor(Color.rgb(8, 18, 34))
         }
-        setContentView(root)
+        scroll.addView(root)
+        setContentView(scroll)
 
         root.addView(TextView(this).apply {
             text = "Settings"
@@ -37,12 +40,34 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, "Saved server cleared", Toast.LENGTH_SHORT).show()
         })
         root.addView(settingButton("Feedback", false) { startActivity(Intent(this, FeedbackActivity::class.java)) })
-        root.addView(settingButton("Account", false) { startActivity(Intent(this, AccountActivity::class.java)) })
-        root.addView(settingButton("About PhotoSync", false) {
-            Toast.makeText(this, "PhotoSync • Local & Private", Toast.LENGTH_SHORT).show()
+        root.addView(settingButton("Report a Bug", false) {
+            startActivity(Intent(this, FeedbackActivity::class.java).putExtra("mode", "bug"))
         })
+        root.addView(settingButton("Account", false) { startActivity(Intent(this, AccountActivity::class.java)) })
+        root.addView(settingButton("About PhotoSync", false) { showAbout() })
 
         if (intent.getBooleanExtra("open_theme", false)) chooseTheme()
+    }
+
+    private fun showAbout() {
+        val about = """
+            PhotoSync
+            Local • Private • Simple
+
+            Built by Pixel Forge
+
+            Pixel Forge is an independent technology studio focused on building thoughtful, practical and privacy-conscious digital products. We believe good software should feel simple on the surface while being carefully engineered underneath.
+
+            PhotoSync is built around that idea: fast local file sharing, a clean experience, and keeping your files under your control.
+
+            Pixel Forge — building useful technology, one product at a time.
+        """.trimIndent()
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("About Pixel Forge")
+            .setMessage(about)
+            .setPositiveButton("Close", null)
+            .show()
     }
 
     private fun chooseTheme() {
