@@ -8,6 +8,7 @@
         android:roundIcon="@drawable/app_icon"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        <activity android:name=".PeerActivity" />
         <activity android:name=".FeedbackActivity" />
         <activity android:name=".AccountActivity" />
         <activity android:name=".SettingsActivity" />
