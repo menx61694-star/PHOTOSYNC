@@ -36,6 +36,8 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -595,14 +597,16 @@ class MainActivity : AppCompatActivity() {
         override fun writeTo(sink: BufferedSink) {
             val total = contentLength()
             var written = 0L
-            val countingSink = object : BufferedSink by sink {
+            val countingSink = object : ForwardingSink(sink) {
                 override fun write(source: okio.Buffer, byteCount: Long) {
-                    sink.write(source, byteCount)
+                    super.write(source, byteCount)
                     written += byteCount
                     onProgress(written, total)
                 }
             }
-            delegate.writeTo(countingSink)
+            val bufferedSink = countingSink.buffer()
+            delegate.writeTo(bufferedSink)
+            bufferedSink.flush()
         }
     }
 }
