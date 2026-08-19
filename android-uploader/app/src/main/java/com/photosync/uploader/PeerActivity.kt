@@ -16,11 +16,9 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.BufferedWriter
 import java.io.File
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
@@ -218,6 +216,22 @@ class PeerActivity : AppCompatActivity() {
         return "file_${System.currentTimeMillis()}"
     }
 
+    private fun writeAsciiLine(output: OutputStream, line: String) {
+        output.write((line + "\n").toByteArray(Charsets.UTF_8))
+        output.flush()
+    }
+
+    private fun readAsciiLine(input: InputStream): String {
+        val buffer = StringBuilder()
+        while (true) {
+            val b = input.read()
+            if (b == -1) error("Connection closed")
+            if (b == '\n'.code) return buffer.toString().removeSuffix("\r")
+            if (buffer.length > 64 * 1024) error("Header too large")
+            buffer.append(b.toChar())
+        }
+    }
+
     private fun sendFile(peer: Peer, uri: Uri) {
         Thread {
             val name = fileName(uri)
@@ -230,16 +244,13 @@ class PeerActivity : AppCompatActivity() {
                 socket.use { s ->
                     val size = temp.length()
                     val mime = contentResolver.getType(uri) ?: "application/octet-stream"
-                    val writer = BufferedWriter(OutputStreamWriter(s.getOutputStream(), Charsets.UTF_8))
-                    writer.write(JSONObject().apply { put("protocol", PROTOCOL); put("filename", name); put("size", size); put("mime", mime) }.toString())
-                    writer.write("\n")
-                    writer.flush()
-                    val response = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8)).readLine()
+                    val output = s.getOutputStream()
+                    writeAsciiLine(output, JSONObject().apply { put("protocol", PROTOCOL); put("filename", name); put("size", size); put("mime", mime) }.toString())
+                    val response = readAsciiLine(s.getInputStream())
                     if (response != "READY") error("Peer rejected transfer")
                     var sent = 0L
                     temp.inputStream().use { input ->
                         val buffer = ByteArray(64 * 1024)
-                        val output = s.getOutputStream()
                         while (true) {
                             val read = input.read(buffer)
                             if (read <= 0) break
@@ -261,16 +272,14 @@ class PeerActivity : AppCompatActivity() {
     private fun receiveFile(socket: Socket) {
         try {
             socket.use { s ->
-                val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
-                val header = JSONObject(reader.readLine() ?: error("Missing transfer header"))
+                val input = s.getInputStream()
+                val header = JSONObject(readAsciiLine(input))
                 if (header.optString("protocol") != PROTOCOL) error("Unsupported protocol")
                 val name = header.optString("filename", "received_file")
                 val size = header.optLong("size", -1L)
                 val mime = header.optString("mime", "application/octet-stream")
                 if (size < 0) error("Invalid size")
-                val writer = BufferedWriter(OutputStreamWriter(s.getOutputStream(), Charsets.UTF_8))
-                writer.write("READY\n")
-                writer.flush()
+                writeAsciiLine(s.getOutputStream(), "READY")
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, name)
                     put(MediaStore.Downloads.MIME_TYPE, mime)
@@ -281,7 +290,6 @@ class PeerActivity : AppCompatActivity() {
                 try {
                     contentResolver.openOutputStream(uri).use { output ->
                         requireNotNull(output)
-                        val input = s.getInputStream()
                         val buffer = ByteArray(64 * 1024)
                         var received = 0L
                         while (received < size) {
