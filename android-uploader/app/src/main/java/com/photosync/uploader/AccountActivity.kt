@@ -3,6 +3,7 @@ package com.photosync.uploader
 import android.graphics.Color
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -26,6 +27,7 @@ class AccountActivity : AppCompatActivity() {
     private lateinit var email: EditText
     private lateinit var password: EditText
     private lateinit var action: Button
+    private lateinit var modeToggle: Button
     private var signup = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,53 +38,49 @@ class AccountActivity : AppCompatActivity() {
     private fun buildUi() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(24))
+            setPadding(dp(38), dp(24), dp(38), dp(24))
             setBackgroundColor(Color.rgb(8, 18, 34))
         }
         setContentView(root)
+
         title = TextView(this).apply {
             text = "Create PhotoSync account"
-            textSize = 26f
+            textSize = 28f
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, dp(18))
+            setPadding(0, 0, 0, dp(24))
         }
         root.addView(title)
+
         name = field("Full name")
         mobile = field("Mobile number")
         username = field("Username (mandatory)")
         email = field("Email")
         password = field("Password (minimum 8 characters)")
         password.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+
         root.addView(name)
         root.addView(mobile)
         root.addView(username)
         root.addView(email)
         root.addView(password)
-        action = Button(this).apply {
-            text = "Create Account"
-            isAllCaps = false
-            setOnClickListener { submit() }
-        }
+
+        action = primaryButton("Create Account")
         root.addView(action)
-        root.addView(Button(this).apply {
-            text = "Already have an account? Log in"
-            isAllCaps = false
-            setOnClickListener { signup = false; refreshMode() }
-        })
-        root.addView(Button(this).apply {
-            text = "Need an account? Sign up"
-            isAllCaps = false
-            setOnClickListener { signup = true; refreshMode() }
-        })
+
+        modeToggle = secondaryButton("Already have an account? Log in")
+        modeToggle.setOnClickListener { signup = !signup; refreshMode() }
+        root.addView(modeToggle)
+
         refreshMode()
     }
 
     private fun refreshMode() {
         title.text = if (signup) "Create PhotoSync account" else "Log in to PhotoSync"
         action.text = if (signup) "Create Account" else "Log In"
-        name.visibility = if (signup) android.view.View.VISIBLE else android.view.View.GONE
-        mobile.visibility = if (signup) android.view.View.VISIBLE else android.view.View.GONE
-        username.visibility = if (signup) android.view.View.VISIBLE else android.view.View.GONE
+        name.visibility = if (signup) View.VISIBLE else View.GONE
+        mobile.visibility = if (signup) View.VISIBLE else View.GONE
+        username.visibility = if (signup) View.VISIBLE else View.GONE
+        modeToggle.text = if (signup) "Already have an account? Log in" else "Need an account? Sign up"
     }
 
     private fun submit() {
@@ -111,37 +109,24 @@ class AccountActivity : AppCompatActivity() {
                         .add("username", username.text.toString().trim())
                 }
                 val endpoint = if (signup) "/account/signup" else "/account/login"
-                val response = client.newCall(
-                    Request.Builder().url(server + endpoint).post(form.build()).build()
-                ).execute()
+                val response = client.newCall(Request.Builder().url(server + endpoint).post(form.build()).build()).execute()
                 val body = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    throw IllegalStateException(JSONObject(body).optString("detail", "Request failed"))
-                }
+                if (!response.isSuccessful) throw IllegalStateException(JSONObject(body).optString("detail", "Request failed"))
                 val json = JSONObject(body)
                 val account = json.optJSONObject("account")
-                val savedName = account?.optString("name", "") ?: ""
-                val savedUsername = account?.optString("username", "") ?: ""
-                val savedEmail = account?.optString("email", emailText) ?: emailText
                 prefs.edit()
-                    .putString("account_name", savedName)
-                    .putString("account_username", savedUsername)
-                    .putString("account_email", savedEmail)
+                    .putString("account_name", account?.optString("name", "") ?: "")
+                    .putString("account_username", account?.optString("username", "") ?: "")
+                    .putString("account_email", account?.optString("email", emailText) ?: emailText)
+                    .putBoolean("account_logged_in", true)
                     .apply()
 
                 runOnUiThread {
-                    Toast.makeText(
-                        this,
-                        if (signup) "Account created ✓" else "Login successful ✓",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    // Return to Home so the three-dot menu immediately reflects the account.
+                    Toast.makeText(this, if (signup) "Account created ✓" else "Login successful ✓", Toast.LENGTH_SHORT).show()
                     finish()
                 }
             } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this, "Account failed: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+                runOnUiThread { Toast.makeText(this, "Account failed: ${e.message}", Toast.LENGTH_LONG).show() }
             }
         }.start()
     }
@@ -151,8 +136,31 @@ class AccountActivity : AppCompatActivity() {
         setTextColor(Color.WHITE)
         setHintTextColor(Color.rgb(145, 158, 177))
         setSingleLine(true)
+        background = getDrawable(com.photosync.uploader.R.drawable.bg_input)
+        setPadding(dp(14), 0, dp(14), 0)
+        layoutParams = LinearLayout.LayoutParams(-1, dp(52)).apply { bottomMargin = dp(12) }
+    }
+
+    private fun primaryButton(label: String): Button = Button(this).apply {
+        text = label
+        textSize = 16f
+        isAllCaps = false
+        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER
+        background = getDrawable(com.photosync.uploader.R.drawable.bg_send_button)
         setPadding(dp(12), 0, dp(12), 0)
-        layoutParams = LinearLayout.LayoutParams(-1, dp(52)).apply { bottomMargin = dp(10) }
+        layoutParams = LinearLayout.LayoutParams(-1, dp(56)).apply { topMargin = dp(4); bottomMargin = dp(10) }
+    }
+
+    private fun secondaryButton(label: String): Button = Button(this).apply {
+        text = label
+        textSize = 15f
+        isAllCaps = false
+        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER
+        background = getDrawable(com.photosync.uploader.R.drawable.bg_outline_button)
+        setPadding(dp(12), 0, dp(12), 0)
+        layoutParams = LinearLayout.LayoutParams(-1, dp(52))
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
