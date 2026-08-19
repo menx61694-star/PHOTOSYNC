@@ -1,6 +1,6 @@
 package com.photosync.uploader
 
-// Stable file transfer + LAN discovery + live receive/preview
+// Stable file transfer + LAN discovery + live receive/preview + transfer progress
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.res.ColorStateList
@@ -14,23 +14,28 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -54,9 +59,8 @@ class MainActivity : AppCompatActivity() {
     private var socket: WebSocket? = null
     private var started = false
     private var discoveryInProgress = false
+    private val activeProgressRows = mutableMapOf<String, View>()
 
-    // Safety net for the live receive list. WebSocket is still the primary path;
-    // polling also catches a file uploaded during socket reconnect/discovery.
     private val receiveRefreshRunnable = object : Runnable {
         override fun run() {
             if (!started) return
@@ -121,7 +125,7 @@ class MainActivity : AppCompatActivity() {
         val raw = prefs.getString("theme_color", "#BDA4FF") ?: "#BDA4FF"
         try {
             val color = Color.parseColor(raw)
-            findViewById<android.view.View>(R.id.menuButton)?.backgroundTintList = ColorStateList.valueOf(color)
+            findViewById<View>(R.id.menuButton)?.backgroundTintList = ColorStateList.valueOf(color)
             findViewById<Button>(R.id.selectButton)?.backgroundTintList = ColorStateList.valueOf(color)
             findViewById<Button>(R.id.findServerButton)?.backgroundTintList = ColorStateList.valueOf(color)
             findViewById<Button>(R.id.saveServerButton)?.backgroundTintList = ColorStateList.valueOf(color)
@@ -166,16 +170,30 @@ class MainActivity : AppCompatActivity() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val data = JSONObject(text)
-                    if (data.optString("type") != "file_uploaded") return
-                    val source = data.optString("source", "unknown")
-                    runOnUiThread {
-                        if (source == "app") {
-                            addFile(data, sentFilesContainer, "No files sent from this app yet")
-                        } else {
-                            addFile(data, receivedFilesContainer, "No files received from web yet")
+                    when (data.optString("type")) {
+                        "upload_progress" -> {
+                            if (data.optString("source") != "web") return
+                            val transferId = data.optString("transfer_id", data.optString("filename"))
+                            val filename = data.optString("filename", "Receiving file")
+                            val percent = data.optInt("percent", 0).coerceIn(0, 100)
+                            runOnUiThread {
+                                val row = ensureProgressRow(receivedFilesContainer, transferId, "Receiving $filename")
+                                row.second.progress = percent
+                            }
                         }
-                        // Do not wait for a manual refresh after a live event.
-                        handler.postDelayed({ if (started) refreshLists() }, 300)
+                        "file_uploaded" -> {
+                            val source = data.optString("source", "unknown")
+                            val transferId = data.optString("transfer_id", "")
+                            runOnUiThread {
+                                if (transferId.isNotBlank()) removeProgressRow(transferId)
+                                if (source == "app") {
+                                    addFile(data, sentFilesContainer, "No files sent from this app yet")
+                                } else {
+                                    addFile(data, receivedFilesContainer, "No files received from web yet")
+                                }
+                                handler.postDelayed({ if (started) refreshLists() }, 300)
+                            }
+                        }
                     }
                 } catch (_: Exception) { }
             }
@@ -279,6 +297,39 @@ class MainActivity : AppCompatActivity() {
         return temp
     }
 
+    private fun ensureProgressRow(container: LinearLayout, key: String, label: String): Pair<View, ProgressBar> {
+        val existing = activeProgressRows[key]
+        if (existing != null) {
+            val bar = existing.findViewWithTag<ProgressBar>("progress_bar")
+            if (bar != null) return existing to bar
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(0xFF172235.toInt())
+        }
+        val text = TextView(this).apply {
+            this.text = label
+            textSize = 13f
+        }
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            tag = "progress_bar"
+            max = 100
+            progress = 0
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(6) }
+        }
+        row.addView(text)
+        row.addView(bar)
+        activeProgressRows[key] = row
+        container.addView(row, 0)
+        return row to bar
+    }
+
+    private fun removeProgressRow(key: String) {
+        val row = activeProgressRows.remove(key) ?: return
+        (row.parent as? ViewGroup)?.removeView(row)
+    }
+
     private fun upload(uri: Uri) {
         val serverUrl = currentServerUrl()
         if (serverUrl.isBlank()) {
@@ -286,6 +337,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val originalName = displayName(uri)
+        val progressKey = "app_${System.nanoTime()}"
+        runOnUiThread { ensureProgressRow(sentFilesContainer, progressKey, "Sending $originalName") }
         Thread {
             var temp: File? = null
             try {
@@ -296,15 +349,29 @@ class MainActivity : AppCompatActivity() {
                     .addFormDataPart("file", originalName, temp.asRequestBody(mime.toMediaType()))
                     .addFormDataPart("source", "app")
                     .build()
-                val request = Request.Builder().url("$serverUrl/upload").post(multipart).build()
+                val counted = CountingRequestBody(multipart) { sent, total ->
+                    val percent = if (total > 0L) ((sent * 100L) / total).toInt().coerceIn(0, 100) else 0
+                    handler.post {
+                        val row = activeProgressRows[progressKey]
+                        val bar = row?.findViewWithTag<ProgressBar>("progress_bar")
+                        if (bar != null) bar.progress = percent
+                    }
+                }
+                val request = Request.Builder().url("$serverUrl/upload").post(counted).build()
                 runOnUiThread { status.text = "Sending $originalName…" }
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
                 }
-                runOnUiThread { status.text = "Sent ✓ $originalName" }
+                runOnUiThread {
+                    removeProgressRow(progressKey)
+                    status.text = "Sent ✓ $originalName"
+                }
                 refreshLists()
             } catch (e: Exception) {
-                runOnUiThread { status.text = "Send failed: ${e.message}" }
+                runOnUiThread {
+                    removeProgressRow(progressKey)
+                    status.text = "Send failed: ${e.message}"
+                }
             } finally {
                 temp?.delete()
             }
@@ -313,7 +380,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshLists() {
         loadFiles("app", sentFilesContainer, "No files sent from this app yet")
-        // Backend supports the received alias for web + older/unknown source files.
         loadFiles("received", receivedFilesContainer, "No files received from web yet")
     }
 
@@ -464,12 +530,16 @@ class MainActivity : AppCompatActivity() {
         }
         val fullUrl = if (path.startsWith("http://") || path.startsWith("https://")) path
         else "$base${if (path.startsWith("/")) path else "/$path"}"
+        val progressKey = "download_${System.nanoTime()}"
+        runOnUiThread { ensureProgressRow(receivedFilesContainer, progressKey, "Downloading $name") }
         Thread {
             try {
                 val request = Request.Builder().url(fullUrl).get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
                     val body = response.body ?: error("Empty file")
+                    val total = body.contentLength()
+                    var received = 0L
                     val values = ContentValues().apply {
                         put(MediaStore.Downloads.DISPLAY_NAME, name)
                         put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
@@ -481,7 +551,23 @@ class MainActivity : AppCompatActivity() {
                     try {
                         contentResolver.openOutputStream(uri).use { output ->
                             requireNotNull(output) { "Cannot open download" }
-                            body.byteStream().use { input -> input.copyTo(output!!) }
+                            body.byteStream().use { input ->
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read <= 0) break
+                                    output.write(buffer, 0, read)
+                                    received += read
+                                    if (total > 0) {
+                                        val percent = ((received * 100L) / total).toInt().coerceIn(0, 100)
+                                        handler.post {
+                                            val row = activeProgressRows[progressKey]
+                                            val bar = row?.findViewWithTag<ProgressBar>("progress_bar")
+                                            if (bar != null) bar.progress = percent
+                                        }
+                                    }
+                                }
+                            }
                         }
                         contentResolver.update(uri, ContentValues().apply {
                             put(MediaStore.Downloads.IS_PENDING, 0)
@@ -494,7 +580,29 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread { Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() }
+            } finally {
+                runOnUiThread { removeProgressRow(progressKey) }
             }
         }.start()
+    }
+
+    private class CountingRequestBody(
+        private val delegate: RequestBody,
+        private val onProgress: (written: Long, total: Long) -> Unit
+    ) : RequestBody() {
+        override fun contentType(): MediaType? = delegate.contentType()
+        override fun contentLength(): Long = delegate.contentLength()
+        override fun writeTo(sink: BufferedSink) {
+            val total = contentLength()
+            var written = 0L
+            val countingSink = object : BufferedSink by sink {
+                override fun write(source: okio.Buffer, byteCount: Long) {
+                    sink.write(source, byteCount)
+                    written += byteCount
+                    onProgress(written, total)
+                }
+            }
+            delegate.writeTo(countingSink)
+        }
     }
 }
