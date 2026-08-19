@@ -118,11 +118,23 @@ async def upload_file(file: UploadFile = File(...), source: str = Form("unknown"
     source = source if source in {"web", "app", "unknown"} else "unknown"
     original = safe_name(file.filename)
     filename = f"{uuid4().hex}__{source}__{original}"
+    transfer_id = uuid4().hex
     destination = UPLOAD_DIR / filename
+    total = int(file.size or 0)
+    received = 0
+    last_reported = -1
     with destination.open("wb") as output:
-        while chunk := await file.read(1024 * 1024): output.write(chunk)
+        while chunk := await file.read(1024 * 1024):
+            output.write(chunk)
+            received += len(chunk)
+            if total > 0:
+                percent = int((received * 100) / total)
+                if percent != last_reported:
+                    last_reported = percent
+                    await manager.broadcast({"type":"upload_progress", "transfer_id":transfer_id, "source":source, "filename":original, "received":received, "total":total, "percent":min(100, percent)})
     info = file_info(destination)
     info["content_type"] = file.content_type or "application/octet-stream"
+    info["transfer_id"] = transfer_id
     await manager.broadcast({"type":"file_uploaded", **info})
     return info
 
