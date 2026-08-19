@@ -116,7 +116,7 @@
                 android:layout_height="52dp"
                 android:layout_marginTop="8dp"
                 android:hint="Manual server URL (optional)"
-                android:hintTextColor="#8795A8"
+                android:textColorHint="#8795A8"
                 android:textColor="#FFFFFF"
                 android:inputType="textUri"
                 android:singleLine="true"
