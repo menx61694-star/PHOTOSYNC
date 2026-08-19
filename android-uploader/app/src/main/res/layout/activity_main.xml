@@ -65,9 +65,9 @@
         </LinearLayout>
 
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp" android:text="Sent Files" android:textColor="#FFFFFF" android:textSize="20sp" android:textStyle="bold" />
-        <LinearLayout android:id="@+id/sentFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="vertical" android:padding="8dp" android:background="@drawable/bg_card" />
+        <com.photosync.uploader.TransferContainerLayout android:id="@+id/sentFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="vertical" android:padding="8dp" android:background="@drawable/bg_card" />
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="22dp" android:text="Received Files" android:textColor="#FFFFFF" android:textSize="20sp" android:textStyle="bold" />
-        <LinearLayout android:id="@+id/receivedFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="vertical" android:padding="8dp" android:background="@drawable/bg_card" />
+        <com.photosync.uploader.TransferContainerLayout android:id="@+id/receivedFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="vertical" android:padding="8dp" android:background="@drawable/bg_card" />
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:layout_marginTop="24dp" android:paddingBottom="16dp" android:text="PhotoSync • Local &amp; Private" android:textColor="#718096" android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>
