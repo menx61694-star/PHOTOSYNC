@@ -44,23 +44,23 @@ class SettingsActivity : AppCompatActivity() {
             startActivity(Intent(this, FeedbackActivity::class.java).putExtra("mode", "bug"))
         })
         root.addView(settingButton("Account", false) { startActivity(Intent(this, AccountActivity::class.java)) })
-        root.addView(settingButton("About PhotoSync", false) { showAbout() })
+        root.addView(settingButton("About Pixel Forge", false) { showAbout() })
 
         if (intent.getBooleanExtra("open_theme", false)) chooseTheme()
     }
 
     private fun showAbout() {
         val about = """
-            PhotoSync
-            Local • Private • Simple
-
-            Built by Pixel Forge
+            Pixel Forge
+            Independent Technology Studio
 
             Pixel Forge is an independent technology studio focused on building thoughtful, practical and privacy-conscious digital products. We believe good software should feel simple on the surface while being carefully engineered underneath.
 
             PhotoSync is built around that idea: fast local file sharing, a clean experience, and keeping your files under your control.
 
-            Pixel Forge — building useful technology, one product at a time.
+            Built with curiosity, crafted with purpose.
+
+            — Pixel Forge
         """.trimIndent()
 
         androidx.appcompat.app.AlertDialog.Builder(this)
