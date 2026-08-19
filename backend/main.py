@@ -4,24 +4,61 @@ import re
 import json
 import socket
 import threading
+import hashlib
+import secrets
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 WEB_DIR = BASE_DIR.parent / "web"
+ACCOUNTS_FILE = BASE_DIR / "accounts.json"
+FEEDBACK_FILE = BASE_DIR / "feedback.jsonl"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 APP_PORT = 8000
 DISCOVERY_PORT = 8001
 DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
 
-app = FastAPI(title="PHOTOSYNC API", version="0.5.0")
+app = FastAPI(title="PHOTOSYNC API", version="0.6.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
+
+_accounts_lock = threading.Lock()
+
+def _load_accounts() -> dict:
+    try:
+        with ACCOUNTS_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _save_accounts(accounts: dict) -> None:
+    tmp = ACCOUNTS_FILE.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(accounts, f, ensure_ascii=False, indent=2)
+    tmp.replace(ACCOUNTS_FILE)
+
+def _password_hash(password: str, salt: bytes | None = None) -> tuple[str, str]:
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120_000)
+    return salt.hex(), digest.hex()
+
+def _verify_password(password: str, salt_hex: str, digest_hex: str) -> bool:
+    try:
+        salt = bytes.fromhex(salt_hex)
+        _, digest = _password_hash(password, salt)
+        return secrets.compare_digest(digest, digest_hex)
+    except ValueError:
+        return False
+
+def _clean_text(value: str, max_len: int) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())[:max_len]
 
 class ConnectionManager:
     def __init__(self): self.connections: set[WebSocket] = set()
@@ -88,6 +125,47 @@ async def upload_file(file: UploadFile = File(...), source: str = Form("unknown"
     info["content_type"] = file.content_type or "application/octet-stream"
     await manager.broadcast({"type":"file_uploaded", **info})
     return info
+
+@app.post("/account/signup")
+def account_signup(name: str = Form(...), mobile: str = Form(...), username: str = Form(...), email: str = Form(...), password: str = Form(...)):
+    name = _clean_text(name, 80)
+    mobile = re.sub(r"[^0-9+ -]", "", mobile or "").strip()[:20]
+    username = re.sub(r"[^A-Za-z0-9_.-]", "", username or "").lower()[:32]
+    email = _clean_text(email, 160).lower()
+    if not name or not mobile or not username or not email or len(password) < 8:
+        raise HTTPException(status_code=400, detail="Name, mobile, username, email and an 8+ character password are required")
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email")
+    with _accounts_lock:
+        accounts = _load_accounts()
+        if username in accounts or any(a.get("email") == email for a in accounts.values()):
+            raise HTTPException(status_code=409, detail="Username or email already exists")
+        salt, digest = _password_hash(password)
+        accounts[username] = {"name": name, "mobile": mobile, "username": username, "email": email, "password_salt": salt, "password_hash": digest, "created_at": datetime.now(timezone.utc).isoformat()}
+        _save_accounts(accounts)
+    return {"ok": True, "message": "Account created", "account": {"name": name, "mobile": mobile, "username": username, "email": email}}
+
+@app.post("/account/login")
+def account_login(email: str = Form(...), password: str = Form(...)):
+    email = _clean_text(email, 160).lower()
+    with _accounts_lock:
+        accounts = _load_accounts()
+        account = next((a for a in accounts.values() if a.get("email") == email), None)
+    if not account or not _verify_password(password, account.get("password_salt", ""), account.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return {"ok": True, "message": "Login successful", "account": {k: account.get(k, "") for k in ("name", "mobile", "username", "email")}}
+
+@app.post("/feedback")
+def feedback(message: str = Form(...), email: str = Form(""), username: str = Form("")):
+    message = _clean_text(message, 2000)
+    email = _clean_text(email, 160).lower()
+    username = _clean_text(username, 32)
+    if not message:
+        raise HTTPException(status_code=400, detail="Feedback message is required")
+    entry = {"message": message, "email": email, "username": username, "created_at": datetime.now(timezone.utc).isoformat()}
+    with FEEDBACK_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return {"ok": True, "message": "Feedback received"}
 
 def discovery_loop():
     """Small UDP LAN discovery responder; no cloud service or IP scanning required."""
