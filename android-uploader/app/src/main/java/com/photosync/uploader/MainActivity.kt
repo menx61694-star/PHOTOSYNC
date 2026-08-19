@@ -1,7 +1,6 @@
 package com.photosync.uploader
 
 // Build trigger: LAN discovery/UI validation
-import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.BitmapFactory
@@ -20,6 +19,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,24 +40,19 @@ import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+    private val client = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
     private lateinit var status: TextView
     private lateinit var serverStatus: TextView
     private lateinit var serverUrlInput: EditText
     private lateinit var sentFilesContainer: LinearLayout
     private lateinit var receivedFilesContainer: LinearLayout
+    private lateinit var mainScroll: ScrollView
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
     private var socket: WebSocket? = null
     private var started = false
     private var discoveryInProgress = false
-
-    private val picker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        if (uris.isNotEmpty()) uris.forEach { upload(it) }
-    }
+    private val picker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> if (uris.isNotEmpty()) uris.forEach { upload(it) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,32 +62,17 @@ class MainActivity : AppCompatActivity() {
         serverUrlInput = findViewById(R.id.serverUrlInput)
         sentFilesContainer = findViewById(R.id.sentFilesContainer)
         receivedFilesContainer = findViewById(R.id.receivedFilesContainer)
+        mainScroll = findViewById(R.id.mainScroll)
         serverUrlInput.setText(prefs.getString("server_url", ""))
-
-        findViewById<Button>(R.id.saveServerButton).setOnClickListener {
-            val url = serverUrlInput.text.toString().trim().removeSuffix("/")
-            if (url.isBlank()) { status.text = "Enter a server URL or use Find Server"; return@setOnClickListener }
-            saveAndConnect(url)
-        }
+        findViewById<Button>(R.id.saveServerButton).setOnClickListener { val url = serverUrlInput.text.toString().trim().removeSuffix("/"); if (url.isBlank()) { status.text = "Enter a server URL or use Find Server"; return@setOnClickListener }; saveAndConnect(url) }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<Button>(R.id.selectButton).setOnClickListener { picker.launch("*/*") }
+        findViewById<LinearLayout>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
+        findViewById<LinearLayout>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
     }
 
-    override fun onStart() {
-        super.onStart()
-        started = true
-        discoverServer()
-    }
-
-    override fun onStop() {
-        started = false
-        socket?.close(1000, "App stopped")
-        socket = null
-        handler.removeCallbacksAndMessages(null)
-        serverStatus.text = "● Server: Disconnected"
-        super.onStop()
-    }
-
+    override fun onStart() { super.onStart(); started = true; discoverServer() }
+    override fun onStop() { started = false; socket?.close(1000, "App stopped"); socket = null; handler.removeCallbacksAndMessages(null); serverStatus.text = "● Server: Disconnected"; super.onStop() }
     private fun currentServerUrl(): String = prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))?.trim()?.removeSuffix("/") ?: ""
     private fun saveAndConnect(url: String) { prefs.edit().putString("server_url", url).apply(); serverUrlInput.setText(url); status.text = "Server saved ✓"; reconnectSocket(); refreshLists() }
     private fun wsUrl(): String { val base = currentServerUrl(); return when { base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws"; base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws"; else -> "ws://$base/ws" } }
@@ -117,18 +97,12 @@ class MainActivity : AppCompatActivity() {
             val dhcp: DhcpInfo = wifi.dhcpInfo
             if (dhcp.ipAddress != 0 && dhcp.netmask != 0) {
                 val broadcast = (dhcp.ipAddress and dhcp.netmask.inv()) or dhcp.netmask
-                val bytes = byteArrayOf(
-                    (broadcast and 0xff).toByte(),
-                    ((broadcast shr 8) and 0xff).toByte(),
-                    ((broadcast shr 16) and 0xff).toByte(),
-                    ((broadcast shr 24) and 0xff).toByte()
-                )
+                val bytes = byteArrayOf((broadcast and 0xff).toByte(), ((broadcast shr 8) and 0xff).toByte(), ((broadcast shr 16) and 0xff).toByte(), ((broadcast shr 24) and 0xff).toByte())
                 result.add(InetAddress.getByAddress(bytes))
             }
         } catch (_: Exception) {}
         return result.distinctBy { it.hostAddress }
     }
-
     private fun discoverServer() {
         if (!started || discoveryInProgress) return
         discoveryInProgress = true; serverStatus.text = "● Server: Searching LAN…"
@@ -138,9 +112,7 @@ class MainActivity : AppCompatActivity() {
                 DatagramSocket().use { udp ->
                     udp.broadcast = true; udp.soTimeout = 600
                     val token = "PHOTOSYNC_DISCOVER_V1".toByteArray(Charsets.UTF_8)
-                    for (address in localBroadcastAddresses()) {
-                        try { udp.send(DatagramPacket(token, token.size, address, 8001)) } catch (_: Exception) {}
-                    }
+                    for (address in localBroadcastAddresses()) try { udp.send(DatagramPacket(token, token.size, address, 8001)) } catch (_: Exception) {}
                     val buffer = ByteArray(1024); val deadline = System.currentTimeMillis() + 2500
                     while (System.currentTimeMillis() < deadline) try {
                         val response = DatagramPacket(buffer, buffer.size); udp.receive(response)
@@ -182,21 +154,19 @@ class MainActivity : AppCompatActivity() {
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
                     val body = response.body ?: error("Empty file")
-                    val resolver = contentResolver
                     val values = ContentValues().apply {
                         put(MediaStore.Downloads.DISPLAY_NAME, name)
                         put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
                         put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                         put(MediaStore.Downloads.IS_PENDING, 1)
                     }
-                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Cannot create download")
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Cannot create download")
                     try {
-                        resolver.openOutputStream(uri).use { output -> requireNotNull(output) { "Cannot open download" }; body.byteStream().use { input -> input.copyTo(output!!) } }
-                        values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0); resolver.update(uri, values, null, null)
+                        contentResolver.openOutputStream(uri).use { output -> requireNotNull(output) { "Cannot open download" }; body.byteStream().use { input -> input.copyTo(output!!) } }
+                        val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                        contentResolver.update(uri, done, null, null)
                         runOnUiThread { Toast.makeText(this, "Downloaded: $name", Toast.LENGTH_SHORT).show() }
-                    } catch (e: Exception) {
-                        resolver.delete(uri, null, null); throw e
-                    }
+                    } catch (e: Exception) { contentResolver.delete(uri, null, null); throw e }
                 }
             } catch (e: Exception) { runOnUiThread { Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() } }
         }.start()
