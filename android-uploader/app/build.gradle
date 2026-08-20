@@ -33,23 +33,31 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
 
-// Build-time source patch: avoid Okio ForwardingSink (sealed-interface compilation issue)
-// while retaining a real byte-level upload progress callback for the file part.
+// Patch the Android source before Kotlin compilation. This avoids Okio's sealed
+// ForwardingSink/BufferedSink implementation issue while keeping real byte-level
+// upload progress through ProgressFileRequestBody.
 tasks.register('patchCountingRequestBody') {
+    outputs.upToDateWhen { false }
     doLast {
         def sourceFile = file('src/main/java/com/photosync/uploader/MainActivity.kt')
         def text = sourceFile.getText('UTF-8')
         def patched = text
 
-        // Remove the problematic Okio import.
+        // Remove the sealed-interface import.
         patched = patched.replace('import okio.ForwardingSink\n', '')
 
-        // Replace the Multipart wrapper progress implementation with a progress-aware file body.
-        patched = patched.replaceFirst(
-            '(?s)val counted = CountingRequestBody\\(multipart\\) \\{.*?\\n                \\}\\n                val request',
-            'val counted = multipart\n                val request'
-        )
+        // Replace the multipart CountingRequestBody block in upload().
+        def countedStart = patched.indexOf('                val counted = CountingRequestBody(multipart) {')
+        if (countedStart >= 0) {
+            def requestStart = patched.indexOf('                val request =', countedStart)
+            if (requestStart > countedStart) {
+                patched = patched.substring(0, countedStart) +
+                    '                val counted = multipart\n' +
+                    patched.substring(requestStart)
+            }
+        }
 
+        // Make the actual temporary file body report bytes written.
         patched = patched.replace(
             'temp.asRequestBody(mime.toMediaType())',
             '''ProgressFileRequestBody(temp, mime.toMediaType()) { sent, total ->
@@ -62,33 +70,14 @@ tasks.register('patchCountingRequestBody') {
                     }'''
         )
 
-        // Replace the old ForwardingSink-based helper with a simple file RequestBody.
-        patched = patched.replaceFirst(
-            '(?s)    private class CountingRequestBody\\(.*?\\n    \\}\\n\\}',
-            '''    private class ProgressFileRequestBody(
-        private val file: File,
-        private val mediaType: MediaType?,
-        private val onProgress: (written: Long, total: Long) -> Unit
-    ) : RequestBody() {
-        override fun contentType(): MediaType? = mediaType
-        override fun contentLength(): Long = file.length()
-        override fun writeTo(sink: BufferedSink) {
-            val total = contentLength()
-            var written = 0L
-            file.inputStream().use { input ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    sink.write(buffer, 0, read)
-                    written += read
-                    onProgress(written, total)
-                }
+        // Remove the old ForwardingSink-based helper from the end of MainActivity.
+        def helperStart = patched.indexOf('    private class CountingRequestBody(')
+        if (helperStart >= 0) {
+            def finalBrace = patched.lastIndexOf('\n}')
+            if (finalBrace > helperStart) {
+                patched = patched.substring(0, helperStart) + '\n}' + '\n'
             }
         }
-    }
-}'''
-        )
 
         if (patched != text) {
             sourceFile.write(patched, 'UTF-8')
@@ -96,6 +85,10 @@ tasks.register('patchCountingRequestBody') {
     }
 }
 
-tasks.named('preBuild') {
-    dependsOn 'patchCountingRequestBody'
+// Run the patch immediately before Kotlin compilation, not merely before the
+// Android preBuild task, so Gradle cannot skip it as an up-to-date preBuild.
+tasks.configureEach { task ->
+    if (task.name.startsWith('compile') && task.name.endsWith('Kotlin')) {
+        task.dependsOn('patchCountingRequestBody')
+    }
 }
