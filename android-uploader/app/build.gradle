@@ -33,17 +33,63 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
 
-// Work around the Kotlin/Okio ForwardingSink sealed-interface compilation issue.
-// The transfer-progress implementation keeps the same behavior by delegating
-// BufferedSink directly and counting bytes in write().
+// Build-time source patch: avoid Okio ForwardingSink (sealed-interface compilation issue)
+// while retaining a real byte-level upload progress callback for the file part.
 tasks.register('patchCountingRequestBody') {
     doLast {
         def sourceFile = file('src/main/java/com/photosync/uploader/MainActivity.kt')
         def text = sourceFile.getText('UTF-8')
         def patched = text
-            .replace('import okio.ForwardingSink\\n', '')
-            .replace('object : ForwardingSink(sink) {', 'object : BufferedSink by sink {')
-            .replace('                    super.write(source, byteCount)', '                    sink.write(source, byteCount)')
+
+        // Remove the problematic Okio import.
+        patched = patched.replace('import okio.ForwardingSink\n', '')
+
+        // Replace the Multipart wrapper progress implementation with a progress-aware file body.
+        patched = patched.replaceFirst(
+            '(?s)val counted = CountingRequestBody\\(multipart\\) \\{.*?\\n                \\}\\n                val request',
+            'val counted = multipart\n                val request'
+        )
+
+        patched = patched.replace(
+            'temp.asRequestBody(mime.toMediaType())',
+            '''ProgressFileRequestBody(temp, mime.toMediaType()) { sent, total ->
+                        val percent = if (total > 0L) ((sent * 100L) / total).toInt().coerceIn(0, 100) else 0
+                        handler.post {
+                            val row = activeProgressRows[progressKey]
+                            val bar = row?.findViewWithTag<ProgressBar>("progress_bar")
+                            if (bar != null) bar.progress = percent
+                        }
+                    }'''
+        )
+
+        // Replace the old ForwardingSink-based helper with a simple file RequestBody.
+        patched = patched.replaceFirst(
+            '(?s)    private class CountingRequestBody\\(.*?\\n    \\}\\n\\}',
+            '''    private class ProgressFileRequestBody(
+        private val file: File,
+        private val mediaType: MediaType?,
+        private val onProgress: (written: Long, total: Long) -> Unit
+    ) : RequestBody() {
+        override fun contentType(): MediaType? = mediaType
+        override fun contentLength(): Long = file.length()
+        override fun writeTo(sink: BufferedSink) {
+            val total = contentLength()
+            var written = 0L
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    sink.write(buffer, 0, read)
+                    written += read
+                    onProgress(written, total)
+                }
+            }
+        }
+    }
+}'''
+        )
+
         if (patched != text) {
             sourceFile.write(patched, 'UTF-8')
         }
