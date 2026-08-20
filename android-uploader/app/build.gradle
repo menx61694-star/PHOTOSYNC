@@ -32,3 +32,24 @@ dependencies {
     implementation 'androidx.activity:activity-ktx:1.10.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
+
+// Work around the Kotlin/Okio ForwardingSink sealed-interface compilation issue.
+// The transfer-progress implementation keeps the same behavior by delegating
+// BufferedSink directly and counting bytes in write().
+tasks.register('patchCountingRequestBody') {
+    doLast {
+        def sourceFile = file('src/main/java/com/photosync/uploader/MainActivity.kt')
+        def text = sourceFile.getText('UTF-8')
+        def patched = text
+            .replace('import okio.ForwardingSink\\n', '')
+            .replace('object : ForwardingSink(sink) {', 'object : BufferedSink by sink {')
+            .replace('                    super.write(source, byteCount)', '                    sink.write(source, byteCount)')
+        if (patched != text) {
+            sourceFile.write(patched, 'UTF-8')
+        }
+    }
+}
+
+tasks.named('preBuild') {
+    dependsOn 'patchCountingRequestBody'
+}
