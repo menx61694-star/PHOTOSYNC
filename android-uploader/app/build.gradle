@@ -33,10 +33,10 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
 
-// Patch the legacy CountingRequestBody before Kotlin compilation.
-// The old implementation subclasses Okio ForwardingSink, which is sealed in
-// the Okio version bundled with OkHttp 4.12. The replacement reports progress
-// while the actual file bytes are written by OkHttp.
+// The app's original CountingRequestBody used Okio ForwardingSink. That API is
+// not compatible with the current OkHttp/Okio combination, so transform the
+// source immediately before Kotlin compilation. Regex is intentionally used
+// here so CRLF/LF and harmless indentation changes cannot break the patch.
 tasks.register('patchUploadProgress') {
     outputs.upToDateWhen { false }
     doLast {
@@ -44,26 +44,23 @@ tasks.register('patchUploadProgress') {
         def text = sourceFile.getText('UTF-8')
         def patched = text
 
-        // Remove obsolete Okio imports used only by CountingRequestBody.
-        patched = patched.replace('import okio.ForwardingSink\n', '')
-        patched = patched.replace('import okio.buffer\n', '')
+        // Remove obsolete Okio imports, regardless of line ending.
+        patched = patched.replaceAll(/(?m)^\s*import okio\.ForwardingSink\s*\r?\n/, '')
+        patched = patched.replaceAll(/(?m)^\s*import okio\.buffer\s*\r?\n/, '')
 
-        // Replace the whole CountingRequestBody call in upload().
-        def uploadStart = patched.indexOf('                val counted = CountingRequestBody(multipart) {')
-        if (uploadStart < 0) {
-            throw new GradleException('PhotoSync patch: upload CountingRequestBody call was not found')
+        // Replace the upload wrapper and its callback block with the plain
+        // multipart body. DOTALL keeps this independent of line formatting.
+        def uploadPattern = /(?s)val\s+counted\s*=\s*CountingRequestBody\(multipart\)\s*\{.*?\n\s*\}\s*\n(\s*val\s+request\s*=)/
+        def uploadMatcher = (patched =~ uploadPattern)
+        if (!uploadMatcher.find()) {
+            throw new GradleException('PhotoSync patch: CountingRequestBody upload block was not found')
         }
-        def requestStart = patched.indexOf('                val request =', uploadStart)
-        if (requestStart < 0) {
-            throw new GradleException('PhotoSync patch: upload Request.Builder was not found')
-        }
-        patched = patched.substring(0, uploadStart) +
-                '                val counted = multipart\n' +
-                patched.substring(requestStart)
+        patched = uploadMatcher.replaceFirst('val counted = multipart\n$1')
 
-        // Make the file part itself report bytes as OkHttp writes it.
-        def oldBody = 'temp.asRequestBody(mime.toMediaType())'
-        if (!patched.contains(oldBody)) {
+        // Wrap only the actual temporary file body so progress reflects bytes
+        // written to the network, not just time elapsed.
+        def oldBodyPattern = /temp\.asRequestBody\(mime\.toMediaType\(\)\)/
+        if (!(patched =~ oldBodyPattern).find()) {
             throw new GradleException('PhotoSync patch: temporary file RequestBody was not found')
         }
         def newBody = '''ProgressFileRequestBody(temp, mime.toMediaType()) { sent, total ->
@@ -74,18 +71,18 @@ tasks.register('patchUploadProgress') {
                             if (bar != null) bar.progress = percent
                         }
                     }'''
-        patched = patched.replace(oldBody, newBody)
+        patched = patched.replaceFirst(oldBodyPattern, newBody)
 
-        // Replace the legacy helper at the end of MainActivity.
-        def helperStart = patched.indexOf('    private class CountingRequestBody(')
-        if (helperStart < 0) {
+        // Replace the old helper through the end of MainActivity. It is the
+        // final private class in this source file.
+        def helperPattern = /(?s)\s*private\s+class\s+CountingRequestBody\s*\(.*?\n\}\s*$/
+        def helperMatcher = (patched =~ helperPattern)
+        if (!helperMatcher.find()) {
             throw new GradleException('PhotoSync patch: CountingRequestBody class was not found')
         }
-        def finalBrace = patched.lastIndexOf('\n}')
-        if (finalBrace <= helperStart) {
-            throw new GradleException('PhotoSync patch: MainActivity closing brace was not found')
-        }
-        def helper = '''    private class ProgressFileRequestBody(
+        def helper = '''
+
+    private class ProgressFileRequestBody(
         private val file: File,
         private val mediaType: MediaType?,
         private val onProgress: (written: Long, total: Long) -> Unit
@@ -109,19 +106,20 @@ tasks.register('patchUploadProgress') {
             }
         }
     }
+}
 '''
-        patched = patched.substring(0, helperStart) + helper + '}' + '\n'
+        patched = helperMatcher.replaceFirst(helper)
 
-        // Hard validation: never compile if the old sealed Okio implementation remains.
+        // Do not allow the old implementation to reach the compiler.
         if (patched.contains('CountingRequestBody') || patched.contains('ForwardingSink') || patched.contains('okio.buffer')) {
-            throw new GradleException('PhotoSync patch validation failed: legacy CountingRequestBody/ForwardingSink code remains')
+            throw new GradleException('PhotoSync patch validation failed: legacy Okio progress implementation remains')
         }
         if (!patched.contains('class ProgressFileRequestBody')) {
             throw new GradleException('PhotoSync patch validation failed: ProgressFileRequestBody was not inserted')
         }
 
         sourceFile.write(patched, 'UTF-8')
-        println 'PhotoSync upload-progress patch applied successfully.'
+        println 'PhotoSync: upload progress source patch applied.'
     }
 }
 
