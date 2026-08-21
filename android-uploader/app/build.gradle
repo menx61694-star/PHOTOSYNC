@@ -33,100 +33,60 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
 
-// Convert the legacy Okio ForwardingSink implementation to a plain RequestBody
-// immediately before Kotlin compilation. This is deliberately index-based:
-// it does not depend on line endings, indentation, or regex replacement rules.
-tasks.register('patchUploadProgress') {
+// The source previously used Okio ForwardingSink. ForwardingSink is sealed in
+// the Okio version used by this project, so compiling that source fails.
+// Replace only that helper before Kotlin compilation with a plain RequestBody
+// that copies through an intermediate Buffer and reports progress.
+tasks.register('fixUploadProgressSource') {
     outputs.upToDateWhen { false }
     doLast {
         def sourceFile = file('src/main/java/com/photosync/uploader/MainActivity.kt')
         def text = sourceFile.getText('UTF-8')
-        def patched = text
 
-        patched = patched.replaceAll(/(?m)^\s*import okio\.ForwardingSink\s*\r?\n/, '')
-        patched = patched.replaceAll(/(?m)^\s*import okio\.buffer\s*\r?\n/, '')
+        text = text.replace('import okio.ForwardingSink\\n', '')
+        text = text.replace('import okio.buffer\\n', '')
+        text = text.replace('import okio.ForwardingSink\r\n', '')
+        text = text.replace('import okio.buffer\r\n', '')
 
-        // Replace the old CountingRequestBody invocation with the multipart body.
-        def countedStart = patched.indexOf('val counted = CountingRequestBody(multipart)')
-        if (countedStart < 0) {
-            throw new GradleException('PhotoSync patch: CountingRequestBody invocation not found')
+        def start = text.lastIndexOf('    private class CountingRequestBody(')
+        def end = text.lastIndexOf('\n}')
+        if (start < 0 || end <= start) {
+            throw new GradleException('PhotoSync: CountingRequestBody block could not be located')
         }
-        def requestStart = patched.indexOf('val request =', countedStart)
-        if (requestStart < 0) {
-            throw new GradleException('PhotoSync patch: upload request declaration not found')
-        }
-        patched = patched.substring(0, countedStart) +
-                'val counted = multipart\n                ' +
-                patched.substring(requestStart)
 
-        // Replace the actual file RequestBody with a body that reports bytes written.
-        def oldBody = 'temp.asRequestBody(mime.toMediaType())'
-        def bodyIndex = patched.indexOf(oldBody)
-        if (bodyIndex < 0) {
-            throw new GradleException('PhotoSync patch: temporary file RequestBody not found')
-        }
-        def newBody = '''ProgressFileRequestBody(temp, mime.toMediaType()) { sent, total ->
-                        val percent = if (total > 0L) ((sent * 100L) / total).toInt().coerceIn(0, 100) else 0
-                        handler.post {
-                            val row = activeProgressRows[progressKey]
-                            val bar = row?.findViewWithTag<ProgressBar>("progress_bar")
-                            if (bar != null) bar.progress = percent
-                        }
-                    }'''
-        patched = patched.substring(0, bodyIndex) + newBody + patched.substring(bodyIndex + oldBody.length())
-
-        // Remove the old helper. It is the final class inside MainActivity.
-        def helperStart = patched.lastIndexOf('\n    private class CountingRequestBody(')
-        if (helperStart < 0) {
-            throw new GradleException('PhotoSync patch: CountingRequestBody class not found')
-        }
-        def fileEnd = patched.lastIndexOf('\n}')
-        if (fileEnd <= helperStart) {
-            throw new GradleException('PhotoSync patch: MainActivity closing brace not found')
-        }
-        def helper = '''
-
-    private class ProgressFileRequestBody(
-        private val file: File,
-        private val mediaType: MediaType?,
+        def replacement = '''    private class CountingRequestBody(
+        private val delegate: RequestBody,
         private val onProgress: (written: Long, total: Long) -> Unit
     ) : RequestBody() {
-        override fun contentType(): MediaType? = mediaType
+        override fun contentType(): MediaType? = delegate.contentType()
 
-        override fun contentLength(): Long = file.length()
+        override fun contentLength(): Long = delegate.contentLength()
 
         override fun writeTo(sink: BufferedSink) {
             val total = contentLength()
+            val buffer = okio.Buffer()
+            delegate.writeTo(buffer)
             var written = 0L
-            file.inputStream().use { input ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    sink.write(buffer, 0, read)
-                    written += read
-                    onProgress(written, total)
-                }
+            while (!buffer.exhausted()) {
+                val chunk = minOf(buffer.size, 64L * 1024L)
+                sink.write(buffer, chunk)
+                written += chunk
+                onProgress(written, total)
             }
         }
     }
-}'''
-        patched = patched.substring(0, helperStart) + helper + '\n'
+'''
+        text = text.substring(0, start) + replacement + text.substring(end)
 
-        if (patched.contains('CountingRequestBody') || patched.contains('ForwardingSink') || patched.contains('okio.buffer')) {
-            throw new GradleException('PhotoSync patch validation failed: legacy progress implementation remains')
+        if (text.contains('ForwardingSink') || text.contains('okio.buffer')) {
+            throw new GradleException('PhotoSync: old sealed ForwardingSink implementation remains')
         }
-        if (!patched.contains('class ProgressFileRequestBody')) {
-            throw new GradleException('PhotoSync patch validation failed: new progress body missing')
-        }
-
-        sourceFile.write(patched, 'UTF-8')
-        println 'PhotoSync: upload progress implementation patched successfully.'
+        sourceFile.write(text, 'UTF-8')
     }
 }
 
 tasks.configureEach { task ->
     if (task.name.startsWith('compile') && task.name.endsWith('Kotlin')) {
-        task.dependsOn('patchUploadProgress')
+        task.dependsOn(fixUploadProgressSource)
     }
 }
