@@ -31,64 +31,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.activity:activity-ktx:1.10.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-}
-
-// The Android source still contains the old Okio ForwardingSink implementation.
-// Okio's ForwardingSink is sealed in the version pulled by this project, so
-// replace that helper with a plain RequestBody immediately before Kotlin compile.
-tasks.register('fixUploadProgressSource') {
-    outputs.upToDateWhen { false }
-    doLast {
-        def sourceFile = file('src/main/java/com/photosync/uploader/MainActivity.kt')
-        def text = sourceFile.getText('UTF-8')
-
-        // Remove the old Okio imports. These are real newline characters,
-        // not the literal two-character sequence "\\n".
-        text = text.replace('import okio.ForwardingSink\n', '')
-        text = text.replace('import okio.buffer\n', '')
-        text = text.replace('import okio.ForwardingSink\r\n', '')
-        text = text.replace('import okio.buffer\r\n', '')
-
-        def start = text.lastIndexOf('    private class CountingRequestBody(')
-        def end = text.lastIndexOf('\n}')
-        if (start < 0 || end <= start) {
-            throw new GradleException('PhotoSync: CountingRequestBody block could not be located')
-        }
-
-        def replacement = '''    private class CountingRequestBody(
-        private val delegate: RequestBody,
-        private val onProgress: (written: Long, total: Long) -> Unit
-    ) : RequestBody() {
-        override fun contentType(): MediaType? = delegate.contentType()
-
-        override fun contentLength(): Long = delegate.contentLength()
-
-        override fun writeTo(sink: BufferedSink) {
-            val total = contentLength()
-            val buffer = okio.Buffer()
-            delegate.writeTo(buffer)
-            var written = 0L
-            while (!buffer.exhausted()) {
-                val chunk = minOf(buffer.size, 64L * 1024L)
-                sink.write(buffer, chunk)
-                written += chunk
-                onProgress(written, total)
-            }
-        }
-    }
-'''
-        text = text.substring(0, start) + replacement + text.substring(end)
-
-        if (text.contains('ForwardingSink') || text.contains('okio.buffer')) {
-            throw new GradleException('PhotoSync: old sealed ForwardingSink implementation remains')
-        }
-        sourceFile.write(text, 'UTF-8')
-        println 'PhotoSync: upload progress source fixed before Kotlin compilation.'
-    }
-}
-
-tasks.configureEach { task ->
-    if (task.name.startsWith('compile') && task.name.endsWith('Kotlin')) {
-        task.dependsOn(fixUploadProgressSource)
-    }
+    // Keep Okio on the version shipped with OkHttp 4.12.0 so the
+    // ForwardingSink-based upload progress implementation remains source-compatible.
+    implementation 'com.squareup.okio:okio-jvm:3.6.0'
 }
