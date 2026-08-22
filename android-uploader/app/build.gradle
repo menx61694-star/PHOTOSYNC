@@ -31,4 +31,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.activity:activity-ktx:1.10.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // MainActivity's ProgressFileRequestBody directly uses Okio's BufferedSink.
+    // Keep the Okio version explicit so CI resolves the same API used by OkHttp 4.12.0.
+    implementation 'com.squareup.okio:okio-jvm:3.6.0'
 }
