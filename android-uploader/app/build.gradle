@@ -33,37 +33,3 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.squareup.okio:okio-jvm:3.6.0'
 }
-
-// Fix the malformed multiline file-row label in MainActivity before Kotlin compilation.
-tasks.register('fixKotlinSourceFormatting') {
-    outputs.upToDateWhen { false }
-    doLast {
-        def sourceFile = file('src/main/java/com/photosync/uploader/MainActivity.kt')
-        def lines = sourceFile.readLines('UTF-8')
-        def fixed = []
-        def changed = false
-        int i = 0
-        while (i < lines.size()) {
-            if (i + 1 < lines.size()
-                    && lines[i].contains('text = "$name\\')
-                    && lines[i + 1].trim() == '\${formatSize(size)}"') {
-                fixed << '            text = "$name\\n\${formatSize(size)}"'
-                changed = true
-                i += 2
-            } else {
-                fixed << lines[i]
-                i++
-            }
-        }
-        if (changed) {
-            sourceFile.write(fixed.join(System.lineSeparator()) + System.lineSeparator(), 'UTF-8')
-            println 'PhotoSync: fixed malformed file-row label string.'
-        }
-    }
-}
-
-tasks.configureEach { task ->
-    if (task.name.startsWith('compile') && task.name.endsWith('Kotlin')) {
-        task.dependsOn('fixKotlinSourceFormatting')
-    }
-}
