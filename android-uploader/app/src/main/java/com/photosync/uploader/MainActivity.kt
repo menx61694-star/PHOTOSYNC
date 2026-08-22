@@ -32,15 +32,13 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
-import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.BufferedSink
-import okio.ForwardingSink
-import okio.buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
@@ -347,11 +345,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { status.text = "Preparing $originalName…" }
                 temp = prepareUpload(uri, originalName)
                 val mime = contentResolver.getType(uri) ?: "application/octet-stream"
-                val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("file", originalName, temp.asRequestBody(mime.toMediaType()))
-                    .addFormDataPart("source", "app")
-                    .build()
-                val counted = CountingRequestBody(multipart) { sent, total ->
+                val progressBody = ProgressFileRequestBody(temp, mime.toMediaType()) { sent, total ->
                     val percent = if (total > 0L) ((sent * 100L) / total).toInt().coerceIn(0, 100) else 0
                     handler.post {
                         val row = activeProgressRows[progressKey]
@@ -359,7 +353,11 @@ class MainActivity : AppCompatActivity() {
                         if (bar != null) bar.progress = percent
                     }
                 }
-                val request = Request.Builder().url("$serverUrl/upload").post(counted).build()
+                val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
+                    .addFormDataPart("file", originalName, progressBody)
+                    .addFormDataPart("source", "app")
+                    .build()
+                val request = Request.Builder().url("$serverUrl/upload").post(multipart).build()
                 runOnUiThread { status.text = "Sending $originalName…" }
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
@@ -588,25 +586,27 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private class CountingRequestBody(
-        private val delegate: RequestBody,
+    private class ProgressFileRequestBody(
+        private val file: File,
+        private val mediaType: MediaType,
         private val onProgress: (written: Long, total: Long) -> Unit
     ) : RequestBody() {
-        override fun contentType(): MediaType? = delegate.contentType()
-        override fun contentLength(): Long = delegate.contentLength()
+        override fun contentType(): MediaType = mediaType
+        override fun contentLength(): Long = file.length()
+
         override fun writeTo(sink: BufferedSink) {
             val total = contentLength()
             var written = 0L
-            val countingSink = object : ForwardingSink(sink) {
-                override fun write(source: okio.Buffer, byteCount: Long) {
-                    super.write(source, byteCount)
-                    written += byteCount
+            FileInputStream(file).use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    sink.write(buffer, 0, read)
+                    written += read
                     onProgress(written, total)
                 }
             }
-            val bufferedSink = countingSink.buffer()
-            delegate.writeTo(bufferedSink)
-            bufferedSink.flush()
         }
     }
 }
