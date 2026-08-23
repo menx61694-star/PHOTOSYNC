@@ -56,18 +56,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainScroll: ScrollView
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
+    private val thumbnailCache by lazy { ThumbnailCache(cacheDir) }
     private var socket: WebSocket? = null
     private var started = false
     private var discoveryInProgress = false
     private val activeProgressRows = mutableMapOf<String, View>()
-
-    private val receiveRefreshRunnable = object : Runnable {
-        override fun run() {
-            if (!started) return
-            refreshLists()
-            handler.postDelayed(this, 2000)
-        }
-    }
+    private var refreshSerial = 0L
 
     private val picker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) uris.forEach { upload(it) }
@@ -103,8 +97,6 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         started = true
         applyThemeColor()
-        handler.removeCallbacks(receiveRefreshRunnable)
-        handler.post(receiveRefreshRunnable)
         discoverServer()
     }
 
@@ -112,7 +104,6 @@ class MainActivity : AppCompatActivity() {
         started = false
         socket?.close(1000, "App stopped")
         socket = null
-        handler.removeCallbacks(receiveRefreshRunnable)
         serverStatus.text = "● Server: Disconnected"
         super.onStop()
     }
@@ -191,7 +182,6 @@ class MainActivity : AppCompatActivity() {
                                 } else {
                                     addFile(data, receivedFilesContainer, "No files received from web yet")
                                 }
-                                handler.postDelayed({ if (started) refreshLists() }, 300)
                             }
                         }
                     }
@@ -386,13 +376,16 @@ class MainActivity : AppCompatActivity() {
     private fun loadFiles(source: String, container: LinearLayout, emptyText: String) {
         val serverUrl = currentServerUrl()
         if (serverUrl.isBlank()) return
+        val serial = ++refreshSerial
         Thread {
             try {
                 val request = Request.Builder().url("$serverUrl/files?source=$source").get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use
                     val json = response.body?.string() ?: "[]"
-                    runOnUiThread { renderFiles(JSONArray(json), container, emptyText) }
+                    runOnUiThread {
+                        if (serial >= refreshSerial - 2 || started) renderFiles(JSONArray(json), container, emptyText)
+                    }
                 }
             } catch (_: Exception) { }
         }.start()
@@ -401,30 +394,70 @@ class MainActivity : AppCompatActivity() {
     private fun addFile(item: JSONObject, container: LinearLayout, emptyText: String) {
         val stored = item.optString("stored_filename", "")
         if (stored.isBlank()) return
-        for (i in 0 until container.childCount) {
-            if (container.getChildAt(i).tag == stored) return
-        }
-        if (container.childCount == 1 && container.getChildAt(0) is TextView &&
-            (container.getChildAt(0) as TextView).text == emptyText) container.removeAllViews()
+        if (findRow(container, stored) != null) return
+        removeEmptyMessage(container, emptyText)
         val row = createFileRow(item)
         row.tag = stored
         container.addView(row, 0)
     }
 
+    private fun findRow(container: LinearLayout, stored: String): View? {
+        for (i in 0 until container.childCount) {
+            val child = container.getChildAt(i)
+            if (child.tag == stored) return child
+        }
+        return null
+    }
+
+    private fun removeEmptyMessage(container: LinearLayout, emptyText: String) {
+        if (container.childCount == 1 && container.getChildAt(0) is TextView &&
+            (container.getChildAt(0) as TextView).text == emptyText) container.removeAllViews()
+    }
+
     private fun renderFiles(files: JSONArray, container: LinearLayout, emptyText: String) {
-        container.removeAllViews()
-        if (files.length() == 0) {
-            container.addView(TextView(this).apply {
-                text = emptyText
-                setPadding(0, dp(8), 0, dp(8))
-            })
+        val incoming = LinkedHashMap<String, JSONObject>()
+        for (i in 0 until files.length()) {
+            val item = files.optJSONObject(i) ?: continue
+            val stored = item.optString("stored_filename", "")
+            if (stored.isNotBlank()) incoming[stored] = item
+        }
+
+        val existingRows = mutableMapOf<String, View>()
+        for (i in container.childCount - 1 downTo 0) {
+            val child = container.getChildAt(i)
+            val stored = child.tag as? String
+            if (stored != null) {
+                existingRows[stored] = child
+                if (!incoming.containsKey(stored)) container.removeViewAt(i)
+            }
+        }
+
+        if (incoming.isEmpty()) {
+            if (existingRows.isEmpty() && container.childCount == 0) {
+                container.addView(TextView(this).apply {
+                    text = emptyText
+                    tag = "__empty__"
+                    setPadding(0, dp(8), 0, dp(8))
+                })
+            }
             return
         }
-        for (i in 0 until files.length()) {
-            val item = files.getJSONObject(i)
-            val row = createFileRow(item)
-            row.tag = item.optString("stored_filename", "")
-            container.addView(row)
+
+        removeEmptyMessage(container, emptyText)
+        var targetIndex = 0
+        for ((stored, item) in incoming) {
+            var row = existingRows[stored]
+            if (row == null) {
+                row = createFileRow(item).apply { tag = stored }
+                container.addView(row, targetIndex.coerceAtMost(container.childCount))
+            } else {
+                val currentIndex = container.indexOfChild(row)
+                if (currentIndex >= 0 && currentIndex != targetIndex) {
+                    container.removeViewAt(currentIndex)
+                    container.addView(row, targetIndex.coerceAtMost(container.childCount))
+                }
+            }
+            targetIndex++
         }
     }
 
@@ -448,6 +481,7 @@ class MainActivity : AppCompatActivity() {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(0xFF2B2B2B.toInt())
                 contentDescription = name
+                tag = "thumbnail:${url}"
             }
             row.addView(image)
             loadThumbnail(currentServerUrl() + url, image)
@@ -470,13 +504,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadThumbnail(url: String, image: ImageView) {
         Thread {
+            val cached = thumbnailCache.get(url)
+            if (cached != null) {
+                runOnUiThread {
+                    if (image.tag == "thumbnail:${url}" && image.parent != null) image.setImageBitmap(cached)
+                }
+                return@Thread
+            }
             try {
                 val request = Request.Builder().url(url).build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use
                     val bytes = response.body?.bytes() ?: return@use
-                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 4 })
-                    if (bitmap != null) runOnUiThread { image.setImageBitmap(bitmap) }
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return@use
+                    thumbnailCache.put(url, bitmap)
+                    runOnUiThread {
+                        if (image.tag == "thumbnail:${url}" && image.parent != null) image.setImageBitmap(bitmap)
+                    }
                 }
             } catch (_: Exception) { }
         }.start()
@@ -546,8 +590,7 @@ class MainActivity : AppCompatActivity() {
                         put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                         put(MediaStore.Downloads.IS_PENDING, 1)
                     }
-                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        ?: error("Cannot create download")
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Cannot create download")
                     try {
                         contentResolver.openOutputStream(uri).use { output ->
                             requireNotNull(output) { "Cannot open download" }
@@ -569,9 +612,7 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         }
-                        contentResolver.update(uri, ContentValues().apply {
-                            put(MediaStore.Downloads.IS_PENDING, 0)
-                        }, null, null)
+                        contentResolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
                         runOnUiThread { Toast.makeText(this, "Downloaded: $name", Toast.LENGTH_SHORT).show() }
                     } catch (e: Exception) {
                         contentResolver.delete(uri, null, null)
@@ -593,7 +634,6 @@ class MainActivity : AppCompatActivity() {
     ) : RequestBody() {
         override fun contentType(): MediaType = mediaType
         override fun contentLength(): Long = file.length()
-
         override fun writeTo(sink: BufferedSink) {
             val total = contentLength()
             var written = 0L
