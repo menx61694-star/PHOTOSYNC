@@ -57,6 +57,14 @@
             android:max="100"
             android:progress="0" />
         <TextView
+            android:id="@+id/peerTransferStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="No active transfer"
+            android:textColor="#B9C7D9"
+            android:textSize="13sp" />
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
@@ -66,6 +74,38 @@
             android:textStyle="bold" />
         <LinearLayout
             android:id="@+id/peerDevices"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:background="@drawable/bg_card" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Sent Files"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+        <LinearLayout
+            android:id="@+id/peerSentFiles"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:background="@drawable/bg_card" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Received Files"
+            android:textColor="#FFFFFF"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+        <LinearLayout
+            android:id="@+id/peerReceivedFiles"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
