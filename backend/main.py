@@ -79,30 +79,57 @@ def safe_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     return name[:180] or "file"
 
+def safe_device_id(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "", value or "")[:128]
+
 def file_info(path: Path) -> dict:
     stored = path.name
-    parts = stored.split("__", 2)
-    if len(parts) == 3:
-        source, original = parts[1], parts[2]
+    parts = stored.split("__", 3)
+    if len(parts) == 4:
+        source, device_id, original = parts[1], parts[2], parts[3]
+    elif len(parts) == 3:
+        # Backward compatibility with the old UUID__source__filename format.
+        source, device_id, original = parts[1], "", parts[2]
     elif len(parts) == 2:
-        source, original = "unknown", parts[1]
+        source, device_id, original = "unknown", "", parts[1]
     else:
-        source, original = "unknown", stored
+        source, device_id, original = "unknown", "", stored
     suffix = path.suffix.lower()
     image = suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
-    return {"filename": original, "stored_filename": stored, "url": f"/uploads/{stored}", "size": path.stat().st_size, "type": "image" if image else "file", "source": source}
+    return {
+        "filename": original,
+        "stored_filename": stored,
+        "url": f"/uploads/{stored}",
+        "size": path.stat().st_size,
+        "type": "image" if image else "file",
+        "source": source,
+        "device_id": device_id,
+    }
 
 @app.get("/")
 def root(): return {"dashboard":"/dashboard/", "health":"/health", "files":"/files", "discovery_port":DISCOVERY_PORT}
 @app.get("/health")
 def health(): return {"status":"ok"}
 @app.get("/files")
-def files(source: str | None = None):
+def files(source: str | None = None, device_id: str | None = None):
     items = [p for p in UPLOAD_DIR.iterdir() if p.is_file() and not p.name.startswith(".")]
     items.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     result = [file_info(p) for p in items]
-    if source == "received": return [x for x in result if x["source"] in {"web", "unknown"}]
+
+    if source == "app":
+        # App uploads are private to the app instance that created them.
+        # Legacy files without a device_id are intentionally not exposed to
+        # app clients because their owner cannot be determined safely.
+        owner = safe_device_id(device_id or "")
+        if not owner:
+            return []
+        return [x for x in result if x["source"] == "app" and x["device_id"] == owner]
+
+    if source == "received":
+        return [x for x in result if x["source"] in {"web", "unknown"}]
+
     return [x for x in result if not source or x["source"] == source]
+
 @app.get("/photos")
 def photos(): return [x for x in files() if x["type"] == "image"]
 
@@ -114,10 +141,19 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect: manager.disconnect(websocket)
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), source: str = Form("unknown")):
+async def upload_file(
+    file: UploadFile = File(...),
+    source: str = Form("unknown"),
+    device_id: str = Form("")
+):
     source = source if source in {"web", "app", "unknown"} else "unknown"
+    device_id = safe_device_id(device_id)
+    if source == "app" and not device_id:
+        raise HTTPException(status_code=400, detail="device_id is required for app uploads")
+
     original = safe_name(file.filename)
-    filename = f"{uuid4().hex}__{source}__{original}"
+    owner = device_id if source == "app" else "web"
+    filename = f"{uuid4().hex}__{source}__{owner}__{original}"
     transfer_id = uuid4().hex
     destination = UPLOAD_DIR / filename
     total = int(file.size or 0)
@@ -131,7 +167,7 @@ async def upload_file(file: UploadFile = File(...), source: str = Form("unknown"
                 percent = int((received * 100) / total)
                 if percent != last_reported:
                     last_reported = percent
-                    await manager.broadcast({"type":"upload_progress", "transfer_id":transfer_id, "source":source, "filename":original, "received":received, "total":total, "percent":min(100, percent)})
+                    await manager.broadcast({"type":"upload_progress", "transfer_id":transfer_id, "source":source, "device_id":device_id, "filename":original, "received":received, "total":total, "percent":min(100, percent)})
     info = file_info(destination)
     info["content_type"] = file.content_type or "application/octet-stream"
     info["transfer_id"] = transfer_id
