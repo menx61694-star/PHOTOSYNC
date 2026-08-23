@@ -58,10 +58,10 @@ class FileViewerActivity : AppCompatActivity() {
         var player: MediaPlayer? = null
         button.setOnClickListener {
             try {
-                if (player?.isPlaying == true) { player?.pause(); text = "Play" }
+                if (player?.isPlaying == true) { player?.pause(); button.text = "Play" }
                 else {
                     if (player == null) player = MediaPlayer().apply { setDataSource(url); prepare(); setOnCompletionListener { button.text = "Play" } }
-                    player?.start(); text = "Pause"
+                    player?.start(); button.text = "Pause"
                 }
             } catch (e: Exception) { button.text = "Unable to play" }
         }
