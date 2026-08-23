@@ -62,9 +62,7 @@ class MainActivity : AppCompatActivity() {
     private var discoveryInProgress = false
     private val activeProgressRows = mutableMapOf<String, View>()
     private val activeReceiveTransfers = mutableMapOf<String, String>()
-    private var refreshSerial = 0L
-
-    private val seamlessRefreshRunnable = object : Runnable {
+    private val receiveRefreshRunnable = object : Runnable {
         override fun run() {
             if (!started) return
             refreshLists()
@@ -106,14 +104,14 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         started = true
         applyThemeColor()
-        handler.removeCallbacks(seamlessRefreshRunnable)
-        handler.post(seamlessRefreshRunnable)
         discoverServer()
+        handler.removeCallbacks(receiveRefreshRunnable)
+        handler.postDelayed(receiveRefreshRunnable, 3000)
     }
 
     override fun onStop() {
         started = false
-        handler.removeCallbacks(seamlessRefreshRunnable)
+        handler.removeCallbacks(receiveRefreshRunnable)
         socket?.close(1000, "App stopped")
         socket = null
         serverStatus.text = "● Server: Disconnected"
@@ -179,11 +177,15 @@ class MainActivity : AppCompatActivity() {
                             val transferId = data.optString("transfer_id", data.optString("filename"))
                             val filename = data.optString("filename", "Receiving file")
                             val percent = data.optInt("percent", 0).coerceIn(0, 100)
-                            if (transferId.isBlank() || percent >= 100) return
                             runOnUiThread {
-                                activeReceiveTransfers[transferId] = filename
-                                val row = ensureProgressRow(receivedFilesContainer, transferId, "Receiving $filename")
-                                row.second.progress = percent
+                                if (percent >= 100) {
+                                    activeReceiveTransfers[transferId] = filename
+                                    removeProgressRow(transferId)
+                                } else {
+                                    activeReceiveTransfers[transferId] = filename
+                                    val row = ensureProgressRow(receivedFilesContainer, transferId, "Receiving $filename")
+                                    row.second.progress = percent
+                                }
                             }
                         }
                         "file_uploaded" -> {
@@ -393,7 +395,6 @@ class MainActivity : AppCompatActivity() {
     private fun loadFiles(source: String, container: LinearLayout, emptyText: String) {
         val serverUrl = currentServerUrl()
         if (serverUrl.isBlank()) return
-        val serial = ++refreshSerial
         Thread {
             try {
                 val request = Request.Builder().url("$serverUrl/files?source=$source").get().build()
@@ -490,7 +491,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun createFileRow(item: JSONObject): LinearLayout {
         val name = item.optString("filename", "file")
-        val url = item.optString("url", "")
+        val path = item.optString("url", "")
         val size = item.optLong("size", 0L)
         val type = item.optString("type", "file")
         val mime = item.optString("content_type", "application/octet-stream")
@@ -499,19 +500,24 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(8), dp(6), dp(8), dp(6))
             setOnClickListener {
-                if (type == "image") showImagePreview(url, name, mime) else downloadFile(url, name, mime)
+                if (type == "image") showImagePreview(path, name, mime) else downloadFile(path, name, mime)
             }
         }
         if (type == "image") {
+            val fullUrl = buildFileUrl(path)
             val image = ImageView(this).apply {
                 layoutParams = LinearLayout.LayoutParams(dp(72), dp(72))
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(0xFF2B2B2B.toInt())
                 contentDescription = name
-                tag = "thumbnail:${url}"
+                // IMPORTANT: validate against the exact URL used by the loader.
+                // The previous code stored the relative /uploads/... path here but
+                // loadThumbnail() compared it with the absolute server URL, so
+                // every successful bitmap load was silently rejected.
+                tag = "thumbnail:$fullUrl"
             }
             row.addView(image)
-            loadThumbnail(currentServerUrl() + url, image)
+            loadThumbnail(fullUrl, image)
         } else {
             row.addView(TextView(this).apply {
                 text = "📄"
@@ -529,12 +535,19 @@ class MainActivity : AppCompatActivity() {
         return row
     }
 
+    private fun buildFileUrl(path: String): String {
+        if (path.startsWith("http://") || path.startsWith("https://")) return path
+        val base = currentServerUrl()
+        if (base.isBlank()) return path
+        return "$base${if (path.startsWith("/")) path else "/$path"}"
+    }
+
     private fun loadThumbnail(url: String, image: ImageView) {
         Thread {
             val cached = thumbnailCache.get(url)
             if (cached != null) {
                 runOnUiThread {
-                    if (image.tag == "thumbnail:${url}" && image.parent != null) image.setImageBitmap(cached)
+                    if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(cached)
                 }
                 return@Thread
             }
@@ -546,7 +559,7 @@ class MainActivity : AppCompatActivity() {
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return@use
                     thumbnailCache.put(url, bitmap)
                     runOnUiThread {
-                        if (image.tag == "thumbnail:${url}" && image.parent != null) image.setImageBitmap(bitmap)
+                        if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(bitmap)
                     }
                 }
             } catch (_: Exception) { }
@@ -556,8 +569,7 @@ class MainActivity : AppCompatActivity() {
     private fun showImagePreview(path: String, name: String, mime: String) {
         val base = currentServerUrl()
         if (base.isBlank() || path.isBlank()) return
-        val fullUrl = if (path.startsWith("http://") || path.startsWith("https://")) path
-        else "$base${if (path.startsWith("/")) path else "/$path"}"
+        val fullUrl = buildFileUrl(path)
         val imageView = ImageView(this).apply {
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -599,8 +611,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Server not connected", Toast.LENGTH_SHORT).show()
             return
         }
-        val fullUrl = if (path.startsWith("http://") || path.startsWith("https://")) path
-        else "$base${if (path.startsWith("/")) path else "/$path"}"
+        val fullUrl = buildFileUrl(path)
         val progressKey = "download_${System.nanoTime()}"
         runOnUiThread { ensureProgressRow(receivedFilesContainer, progressKey, "Downloading $name") }
         Thread {
