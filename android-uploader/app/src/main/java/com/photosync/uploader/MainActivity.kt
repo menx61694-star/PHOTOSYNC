@@ -61,7 +61,16 @@ class MainActivity : AppCompatActivity() {
     private var started = false
     private var discoveryInProgress = false
     private val activeProgressRows = mutableMapOf<String, View>()
+    private val activeReceiveTransfers = mutableMapOf<String, String>()
     private var refreshSerial = 0L
+
+    private val seamlessRefreshRunnable = object : Runnable {
+        override fun run() {
+            if (!started) return
+            refreshLists()
+            handler.postDelayed(this, 3000)
+        }
+    }
 
     private val picker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) uris.forEach { upload(it) }
@@ -97,11 +106,14 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         started = true
         applyThemeColor()
+        handler.removeCallbacks(seamlessRefreshRunnable)
+        handler.post(seamlessRefreshRunnable)
         discoverServer()
     }
 
     override fun onStop() {
         started = false
+        handler.removeCallbacks(seamlessRefreshRunnable)
         socket?.close(1000, "App stopped")
         socket = null
         serverStatus.text = "● Server: Disconnected"
@@ -167,7 +179,9 @@ class MainActivity : AppCompatActivity() {
                             val transferId = data.optString("transfer_id", data.optString("filename"))
                             val filename = data.optString("filename", "Receiving file")
                             val percent = data.optInt("percent", 0).coerceIn(0, 100)
+                            if (transferId.isBlank() || percent >= 100) return
                             runOnUiThread {
+                                activeReceiveTransfers[transferId] = filename
                                 val row = ensureProgressRow(receivedFilesContainer, transferId, "Receiving $filename")
                                 row.second.progress = percent
                             }
@@ -176,7 +190,10 @@ class MainActivity : AppCompatActivity() {
                             val source = data.optString("source", "unknown")
                             val transferId = data.optString("transfer_id", "")
                             runOnUiThread {
-                                if (transferId.isNotBlank()) removeProgressRow(transferId)
+                                if (transferId.isNotBlank()) {
+                                    activeReceiveTransfers.remove(transferId)
+                                    removeProgressRow(transferId)
+                                }
                                 if (source == "app") {
                                     addFile(data, sentFilesContainer, "No files sent from this app yet")
                                 } else {
@@ -384,11 +401,28 @@ class MainActivity : AppCompatActivity() {
                     if (!response.isSuccessful) return@use
                     val json = response.body?.string() ?: "[]"
                     runOnUiThread {
-                        if (serial >= refreshSerial - 2 || started) renderFiles(JSONArray(json), container, emptyText)
+                        if (!started) return@runOnUiThread
+                        renderFiles(JSONArray(json), container, emptyText)
+                        if (source == "received") reconcileReceiveProgress(JSONArray(json))
                     }
                 }
             } catch (_: Exception) { }
         }.start()
+    }
+
+    private fun reconcileReceiveProgress(files: JSONArray) {
+        if (activeReceiveTransfers.isEmpty()) return
+        val completedNames = HashSet<String>()
+        for (i in 0 until files.length()) {
+            val item = files.optJSONObject(i) ?: continue
+            val name = item.optString("filename", "")
+            if (name.isNotBlank()) completedNames.add(name)
+        }
+        val completedTransfers = activeReceiveTransfers.filterValues { completedNames.contains(it) }.keys.toList()
+        for (transferId in completedTransfers) {
+            activeReceiveTransfers.remove(transferId)
+            removeProgressRow(transferId)
+        }
     }
 
     private fun addFile(item: JSONObject, container: LinearLayout, emptyText: String) {
@@ -410,8 +444,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun removeEmptyMessage(container: LinearLayout, emptyText: String) {
-        if (container.childCount == 1 && container.getChildAt(0) is TextView &&
-            (container.getChildAt(0) as TextView).text == emptyText) container.removeAllViews()
+        for (i in container.childCount - 1 downTo 0) {
+            val child = container.getChildAt(i)
+            if (child is TextView && child.tag == "__empty__" && child.text == emptyText) container.removeViewAt(i)
+        }
     }
 
     private fun renderFiles(files: JSONArray, container: LinearLayout, emptyText: String) {
@@ -426,7 +462,7 @@ class MainActivity : AppCompatActivity() {
         for (i in container.childCount - 1 downTo 0) {
             val child = container.getChildAt(i)
             val stored = child.tag as? String
-            if (stored != null) {
+            if (stored != null && stored != "__empty__") {
                 existingRows[stored] = child
                 if (!incoming.containsKey(stored)) container.removeViewAt(i)
             }
@@ -444,20 +480,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         removeEmptyMessage(container, emptyText)
-        var targetIndex = 0
         for ((stored, item) in incoming) {
-            var row = existingRows[stored]
-            if (row == null) {
-                row = createFileRow(item).apply { tag = stored }
-                container.addView(row, targetIndex.coerceAtMost(container.childCount))
-            } else {
-                val currentIndex = container.indexOfChild(row)
-                if (currentIndex >= 0 && currentIndex != targetIndex) {
-                    container.removeViewAt(currentIndex)
-                    container.addView(row, targetIndex.coerceAtMost(container.childCount))
-                }
+            if (existingRows[stored] == null) {
+                val row = createFileRow(item).apply { tag = stored }
+                container.addView(row, 0)
             }
-            targetIndex++
         }
     }
 
