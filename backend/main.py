@@ -61,13 +61,21 @@ def _clean_text(value: str, max_len: int) -> str:
     return re.sub(r"\s+", " ", (value or "").strip())[:max_len]
 
 class ConnectionManager:
-    def __init__(self): self.connections: set[WebSocket] = set()
+    def __init__(self): self.connections: dict[WebSocket, str] = {}
     async def connect(self, websocket: WebSocket):
-        await websocket.accept(); self.connections.add(websocket)
-    def disconnect(self, websocket: WebSocket): self.connections.discard(websocket)
-    async def broadcast(self, message: dict):
+        await websocket.accept()
+        host = websocket.client.host if websocket.client else "unknown"
+        self.connections[websocket] = self.owner_from_host(host)
+    def disconnect(self, websocket: WebSocket): self.connections.pop(websocket, None)
+    @staticmethod
+    def owner_from_host(host: str) -> str:
+        digest = hashlib.sha256((host or "unknown").encode("utf-8")).hexdigest()[:24]
+        return f"ip_{digest}"
+    async def broadcast(self, message: dict, target_owner: str | None = None):
         dead=[]
-        for connection in self.connections:
+        for connection, owner in list(self.connections.items()):
+            if target_owner and owner != target_owner:
+                continue
             try: await connection.send_json(message)
             except Exception: dead.append(connection)
         for connection in dead: self.disconnect(connection)
@@ -87,8 +95,7 @@ def request_owner_id(request: Request, supplied: str = "") -> str:
     if supplied:
         return supplied
     host = request.client.host if request.client else "unknown"
-    digest = hashlib.sha256(host.encode("utf-8")).hexdigest()[:24]
-    return f"ip_{digest}"
+    return ConnectionManager.owner_from_host(host)
 
 def file_info(path: Path) -> dict:
     stored = path.name
@@ -105,23 +112,26 @@ def file_info(path: Path) -> dict:
     image = suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
     return {"filename": original, "stored_filename": stored, "url": f"/uploads/{stored}", "size": path.stat().st_size, "type": "image" if image else "file", "source": source, "device_id": device_id}
 
+def list_files(source: str | None = None, device_id: str | None = None, request: Request | None = None) -> list[dict]:
+    items = [p for p in UPLOAD_DIR.iterdir() if p.is_file() and not p.name.startswith(".")]
+    items.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    result = [file_info(p) for p in items]
+    if source == "app":
+        owner = safe_device_id(device_id or "")
+        if not owner and request is not None:
+            owner = request_owner_id(request)
+        return [x for x in result if x["source"] == "app" and x["device_id"] == owner]
+    if source == "received": return [x for x in result if x["source"] in {"web", "unknown"}]
+    return [x for x in result if not source or x["source"] == source]
+
 @app.get("/")
 def root(): return {"dashboard":"/dashboard/", "health":"/health", "files":"/files", "discovery_port":DISCOVERY_PORT}
 @app.get("/health")
 def health(): return {"status":"ok"}
 @app.get("/files")
-def files(request: Request, source: str | None = None, device_id: str | None = None):
-    items = [p for p in UPLOAD_DIR.iterdir() if p.is_file() and not p.name.startswith(".")]
-    items.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    result = [file_info(p) for p in items]
-    if source == "app":
-        owner = request_owner_id(request, device_id or "")
-        return [x for x in result if x["source"] == "app" and x["device_id"] == owner]
-    if source == "received": return [x for x in result if x["source"] in {"web", "unknown"}]
-    return [x for x in result if not source or x["source"] == source]
-
+def files(request: Request, source: str | None = None, device_id: str | None = None): return list_files(source, device_id, request)
 @app.get("/photos")
-def photos(): return [x for x in files.__wrapped__() if x["type"] == "image"]
+def photos(): return [x for x in list_files() if x["type"] == "image"]
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -150,11 +160,11 @@ async def upload_file(request: Request, file: UploadFile = File(...), source: st
                 percent = int((received * 100) / total)
                 if percent != last_reported:
                     last_reported = percent
-                    await manager.broadcast({"type":"upload_progress", "transfer_id":transfer_id, "source":source, "device_id":device_id, "filename":original, "received":received, "total":total, "percent":min(100, percent)})
+                    await manager.broadcast({"type":"upload_progress", "transfer_id":transfer_id, "source":source, "device_id":device_id, "filename":original, "received":received, "total":total, "percent":min(100, percent)}, target_owner=device_id if source == "app" else None)
     info = file_info(destination)
     info["content_type"] = file.content_type or "application/octet-stream"
     info["transfer_id"] = transfer_id
-    await manager.broadcast({"type":"file_uploaded", **info})
+    await manager.broadcast({"type":"file_uploaded", **info}, target_owner=device_id if source == "app" else None)
     return info
 
 @app.post("/account/signup")
