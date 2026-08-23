@@ -8,7 +8,7 @@ import hashlib
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -82,13 +82,20 @@ def safe_name(name: str) -> str:
 def safe_device_id(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "", value or "")[:128]
 
+def request_owner_id(request: Request, supplied: str = "") -> str:
+    supplied = safe_device_id(supplied)
+    if supplied:
+        return supplied
+    host = request.client.host if request.client else "unknown"
+    digest = hashlib.sha256(host.encode("utf-8")).hexdigest()[:24]
+    return f"ip_{digest}"
+
 def file_info(path: Path) -> dict:
     stored = path.name
     parts = stored.split("__", 3)
     if len(parts) == 4:
         source, device_id, original = parts[1], parts[2], parts[3]
     elif len(parts) == 3:
-        # Backward compatibility with the old UUID__source__filename format.
         source, device_id, original = parts[1], "", parts[2]
     elif len(parts) == 2:
         source, device_id, original = "unknown", "", parts[1]
@@ -96,42 +103,25 @@ def file_info(path: Path) -> dict:
         source, device_id, original = "unknown", "", stored
     suffix = path.suffix.lower()
     image = suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
-    return {
-        "filename": original,
-        "stored_filename": stored,
-        "url": f"/uploads/{stored}",
-        "size": path.stat().st_size,
-        "type": "image" if image else "file",
-        "source": source,
-        "device_id": device_id,
-    }
+    return {"filename": original, "stored_filename": stored, "url": f"/uploads/{stored}", "size": path.stat().st_size, "type": "image" if image else "file", "source": source, "device_id": device_id}
 
 @app.get("/")
 def root(): return {"dashboard":"/dashboard/", "health":"/health", "files":"/files", "discovery_port":DISCOVERY_PORT}
 @app.get("/health")
 def health(): return {"status":"ok"}
 @app.get("/files")
-def files(source: str | None = None, device_id: str | None = None):
+def files(request: Request, source: str | None = None, device_id: str | None = None):
     items = [p for p in UPLOAD_DIR.iterdir() if p.is_file() and not p.name.startswith(".")]
     items.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     result = [file_info(p) for p in items]
-
     if source == "app":
-        # App uploads are private to the app instance that created them.
-        # Legacy files without a device_id are intentionally not exposed to
-        # app clients because their owner cannot be determined safely.
-        owner = safe_device_id(device_id or "")
-        if not owner:
-            return []
+        owner = request_owner_id(request, device_id or "")
         return [x for x in result if x["source"] == "app" and x["device_id"] == owner]
-
-    if source == "received":
-        return [x for x in result if x["source"] in {"web", "unknown"}]
-
+    if source == "received": return [x for x in result if x["source"] in {"web", "unknown"}]
     return [x for x in result if not source or x["source"] == source]
 
 @app.get("/photos")
-def photos(): return [x for x in files() if x["type"] == "image"]
+def photos(): return [x for x in files.__wrapped__() if x["type"] == "image"]
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -141,16 +131,9 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect: manager.disconnect(websocket)
 
 @app.post("/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    source: str = Form("unknown"),
-    device_id: str = Form("")
-):
+async def upload_file(request: Request, file: UploadFile = File(...), source: str = Form("unknown"), device_id: str = Form("")):
     source = source if source in {"web", "app", "unknown"} else "unknown"
-    device_id = safe_device_id(device_id)
-    if source == "app" and not device_id:
-        raise HTTPException(status_code=400, detail="device_id is required for app uploads")
-
+    device_id = request_owner_id(request, device_id) if source == "app" else ""
     original = safe_name(file.filename)
     owner = device_id if source == "app" else "web"
     filename = f"{uuid4().hex}__{source}__{owner}__{original}"
