@@ -56,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainScroll: ScrollView
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
+    private val deviceIdentity by lazy { DeviceIdentity(this) }
     private val thumbnailCache by lazy { ThumbnailCache(cacheDir) }
     private var socket: WebSocket? = null
     private var started = false
@@ -143,12 +144,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun wsUrl(): String {
         val base = currentServerUrl()
+        val id = java.net.URLEncoder.encode(deviceIdentity.id, "UTF-8")
         return when {
-            base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws"
-            base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws"
-            else -> "ws://$base/ws"
+            base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws?device_id=$id"
+            base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws?device_id=$id"
+            else -> "ws://$base/ws?device_id=$id"
         }
     }
+
+    private fun requestBuilder(url: String): Request.Builder =
+        Request.Builder().url(url).header("X-PhotoSync-Device-ID", deviceIdentity.id)
 
     private fun reconnectSocket() {
         socket?.close(1000, "Reconnect")
@@ -160,7 +165,7 @@ class MainActivity : AppCompatActivity() {
         if (!started || currentServerUrl().isBlank()) return
         socket?.cancel()
         serverStatus.text = "● Server: Connecting…"
-        socket = client.newWebSocket(Request.Builder().url(wsUrl()).build(), object : WebSocketListener() {
+        socket = client.newWebSocket(requestBuilder(wsUrl()).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
                 runOnUiThread {
                     serverStatus.text = "● Server: Connected"
@@ -190,6 +195,8 @@ class MainActivity : AppCompatActivity() {
                         }
                         "file_uploaded" -> {
                             val source = data.optString("source", "unknown")
+                            val targetDevice = data.optString("device_id", "")
+                            if (targetDevice.isNotBlank() && targetDevice != deviceIdentity.id) return
                             val transferId = data.optString("transfer_id", "")
                             runOnUiThread {
                                 if (transferId.isNotBlank()) {
@@ -365,8 +372,9 @@ class MainActivity : AppCompatActivity() {
                 val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("file", originalName, progressBody)
                     .addFormDataPart("source", "app")
+                    .addFormDataPart("device_id", deviceIdentity.id)
                     .build()
-                val request = Request.Builder().url("$serverUrl/upload").post(multipart).build()
+                val request = requestBuilder("$serverUrl/upload").post(multipart).build()
                 runOnUiThread { status.text = "Sending $originalName…" }
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
@@ -397,7 +405,7 @@ class MainActivity : AppCompatActivity() {
         if (serverUrl.isBlank()) return
         Thread {
             try {
-                val request = Request.Builder().url("$serverUrl/files?source=$source").get().build()
+                val request = requestBuilder("$serverUrl/files?source=$source").get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use
                     val json = response.body?.string() ?: "[]"
@@ -510,10 +518,6 @@ class MainActivity : AppCompatActivity() {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(0xFF2B2B2B.toInt())
                 contentDescription = name
-                // IMPORTANT: validate against the exact URL used by the loader.
-                // The previous code stored the relative /uploads/... path here but
-                // loadThumbnail() compared it with the absolute server URL, so
-                // every successful bitmap load was silently rejected.
                 tag = "thumbnail:$fullUrl"
             }
             row.addView(image)
@@ -546,21 +550,17 @@ class MainActivity : AppCompatActivity() {
         Thread {
             val cached = thumbnailCache.get(url)
             if (cached != null) {
-                runOnUiThread {
-                    if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(cached)
-                }
+                runOnUiThread { if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(cached) }
                 return@Thread
             }
             try {
-                val request = Request.Builder().url(url).build()
+                val request = requestBuilder(url).get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use
                     val bytes = response.body?.bytes() ?: return@use
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return@use
                     thumbnailCache.put(url, bitmap)
-                    runOnUiThread {
-                        if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(bitmap)
-                    }
+                    runOnUiThread { if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(bitmap) }
                 }
             } catch (_: Exception) { }
         }.start()
@@ -586,7 +586,7 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
         Thread {
             try {
-                val request = Request.Builder().url(fullUrl).get().build()
+                val request = requestBuilder(fullUrl).get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use
                     val bytes = response.body?.bytes() ?: return@use
@@ -616,7 +616,7 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread { ensureProgressRow(receivedFilesContainer, progressKey, "Downloading $name") }
         Thread {
             try {
-                val request = Request.Builder().url(fullUrl).get().build()
+                val request = requestBuilder(fullUrl).get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
                     val body = response.body ?: error("Empty file")
