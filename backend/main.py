@@ -17,7 +17,7 @@ DEVICES_DIR.mkdir(parents=True, exist_ok=True)
 APP_PORT = 8000
 DISCOVERY_PORT = 8001
 DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
-app = FastAPI(title="PHOTOSYNC API", version="0.7.1")
+app = FastAPI(title="PHOTOSYNC API", version="0.7.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
 
@@ -84,12 +84,18 @@ def list_dir(path,source,device_id):
     return [file_info(p,source,device_id) for p in items]
 
 @app.get('/')
-def root(): return {'dashboard':'/dashboard/','health':'/health','files':'/files','connections':'/connections','discovery_port':DISCOVERY_PORT}
+def root(): return {'dashboard':'/dashboard/','health':'/health','files':'/files','connections':'/connections','devices':'/devices','discovery_port':DISCOVERY_PORT}
 @app.get('/health')
 def health(): return {'status':'ok'}
 @app.get('/connections')
 def connections():
     devices=manager.devices(); return {'count':len(devices),'devices':[{'device_id':d} for d in devices]}
+@app.get('/devices')
+def devices():
+    stored=[]
+    for d in DEVICES_DIR.iterdir() if DEVICES_DIR.exists() else []:
+        if d.is_dir() and safe_device_id(d.name)==d.name: stored.append(d.name)
+    return {'devices':sorted(set(stored) | set(manager.devices()))}
 
 @app.get('/files')
 def files(request:Request,source:str|None=None,device_id:str|None=None):
@@ -135,8 +141,7 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
         owner=request_owner_id(request,device_id); folder,_=device_dirs(owner); event_device=owner
     original=safe_name(file.filename); transfer_id=uuid4().hex; total=int(file.size or 0); received=0; last=-1
     if source=='web':
-        data=await file.read()
-        results=[]
+        data=await file.read(); results=[]
         for did,folder in folders:
             filename=f'{uuid4().hex}__web__{did}__{original}'; destination=folder/filename; destination.write_bytes(data)
             info=file_info(destination,'received',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
