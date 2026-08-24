@@ -2,25 +2,27 @@ from pathlib import Path
 from uuid import uuid4
 import re, json, socket, threading, hashlib, secrets
 from datetime import datetime, timezone
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DEVICES_DIR = DATA_DIR / "devices"
+WEB_CLIENTS_DIR = DATA_DIR / "web_clients"
 WEB_DIR = BASE_DIR.parent / "web"
 ACCOUNTS_FILE = BASE_DIR / "accounts.json"
 FEEDBACK_FILE = BASE_DIR / "feedback.jsonl"
 DEVICES_DIR.mkdir(parents=True, exist_ok=True)
+WEB_CLIENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 APP_PORT = 8000
 DISCOVERY_PORT = 8001
 DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
-app = FastAPI(title="PHOTOSYNC API", version="0.7.5")
+app = FastAPI(title="PHOTOSYNC API", version="0.8.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
-
 _accounts_lock = threading.Lock()
 
 def _load_accounts():
@@ -56,17 +58,20 @@ def request_owner_id(request, supplied=''):
 def device_dirs(device_id):
     d=DEVICES_DIR/safe_device_id(device_id); uploads=d/'uploads'; downloads=d/'downloads'; uploads.mkdir(parents=True,exist_ok=True); downloads.mkdir(parents=True,exist_ok=True); return uploads,downloads
 
+def web_client_dir(client_id):
+    client_id=safe_device_id(client_id)
+    if not client_id: raise HTTPException(400,'web_client_id required')
+    d=WEB_CLIENTS_DIR/client_id; d.mkdir(parents=True,exist_ok=True); return d
+
 def file_info(path, source, device_id):
     parts=path.name.split('__')
     info={'filename':parts[-1] if len(parts)>=2 else path.name,'stored_filename':path.name,'url':f'/files/{safe_device_id(device_id)}/{source}/{path.name}','size':path.stat().st_size,'type':'image' if path.suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif','.bmp'} else 'file','source':source,'device_id':safe_device_id(device_id)}
-    if source=='web' and parts and re.fullmatch(r'[0-9a-f]{32}',parts[0] or ''):
-        info['transfer_id']=parts[0]
+    if source=='web' and parts and re.fullmatch(r'[0-9a-f]{32}',parts[0] or ''): info['transfer_id']=parts[0]
     return info
 
 class ConnectionManager:
     def __init__(self): self.connections={}; self.connection_ips={}
-    async def connect(self,ws,device_id):
-        await ws.accept(); self.connections[ws]=device_id; self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
+    async def connect(self,ws,device_id): await ws.accept(); self.connections[ws]=device_id; self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
     def disconnect(self,ws): self.connections.pop(ws,None); self.connection_ips.pop(ws,None)
     def devices(self): return sorted(set(self.connections.values()))
     def ip_for_device(self,device_id):
@@ -98,20 +103,16 @@ def list_all_devices(source):
     for d in DEVICES_DIR.iterdir() if DEVICES_DIR.exists() else []:
         if not d.is_dir() or safe_device_id(d.name)!=d.name: continue
         uploads,downloads=device_dirs(d.name)
-        if source in {'app','received'}:
-            result.extend(list_dir(uploads,'app',d.name))
+        if source in {'app','received'}: result.extend(list_dir(uploads,'app',d.name))
         elif source=='web':
-            items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
-            items.sort(key=lambda p:p.stat().st_mtime,reverse=True)
-            result.extend(file_info(p,'web',d.name) for p in items)
+            items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]; items.sort(key=lambda p:p.stat().st_mtime,reverse=True); result.extend(file_info(p,'web',d.name) for p in items)
     if source=='web':
         unique={}
         for item in result:
             key=item.get('transfer_id') or (item.get('filename',''),item.get('size',0))
             if key not in unique: unique[key]=item
         result=list(unique.values())
-    result.sort(key=lambda x:x.get('stored_filename',''), reverse=True)
-    return result
+    result.sort(key=lambda x:x.get('stored_filename',''), reverse=True); return result
 
 @app.get('/')
 def root(): return {'dashboard':'/dashboard/','standalone':'/dashboard/standalone.html','health':'/health','files':'/files','connections':'/connections','devices':'/devices','discovery_port':DISCOVERY_PORT}
@@ -127,17 +128,28 @@ def devices():
         if d.is_dir() and safe_device_id(d.name)==d.name: stored.append(d.name)
     return {'devices':sorted(set(stored) | set(manager.devices()))}
 
+@app.post('/web-client/session')
+def web_client_session():
+    client_id=uuid4().hex; web_client_dir(client_id)
+    return {'web_client_id':client_id}
+
+@app.get('/web-client/files')
+def web_client_files(web_client_id:str):
+    web_client_dir(web_client_id)
+    path=WEB_CLIENTS_DIR/safe_device_id(web_client_id)/'history.json'
+    try: data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else []
+    except json.JSONDecodeError: data=[]
+    return data if isinstance(data,list) else []
+
 @app.get('/files')
 def files(request:Request,source:str|None=None,device_id:str|None=None,all:bool=False):
-    if all:
-        return list_all_devices(source or '')
+    if all: return list_all_devices(source or '')
     owner=request_owner_id(request,device_id or '')
     uploads,downloads=device_dirs(owner)
     if source=='app': return list_dir(uploads,'app',owner)
     if source=='received': return list_dir(downloads,'received',owner)
     if source=='web':
-        items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
-        return [file_info(p,'web',owner) for p in items]
+        items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]; return [file_info(p,'web',owner) for p in items]
     return list_dir(uploads,'app',owner)+list_dir(downloads,'received',owner)
 
 @app.get('/files/{device_id}/{source}/{filename}')
@@ -146,57 +158,40 @@ def get_file(device_id:str,source:str,filename:str):
     if source not in {'app','received','web'}: raise HTTPException(404,'Not found')
     uploads,downloads=device_dirs(device_id); path=(uploads if source=='app' else downloads)/filename
     if not path.is_file(): raise HTTPException(404,'Not found')
-    from fastapi.responses import FileResponse
     return FileResponse(path)
 
 @app.websocket('/ws')
 async def websocket_endpoint(websocket:WebSocket):
-    supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''))
-    host=websocket.client.host if websocket.client else 'unknown'
-    device_id=supplied or ip_owner_id(host)
-    device_dirs(device_id)
-    await manager.connect(websocket,device_id)
-    await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'connections':len(manager.devices())})
-    await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
+    supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID','')); host=websocket.client.host if websocket.client else 'unknown'; device_id=supplied or ip_owner_id(host); device_dirs(device_id); await manager.connect(websocket,device_id); await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'connections':len(manager.devices())}); await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
     try:
         while True: await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket); await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
 
 @app.post('/upload')
-async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form('')):
+async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form(''),web_client_id:str=Form('')):
     source=source if source in {'web','app','unknown'} else 'unknown'
-    if source=='app':
-        owner=request_owner_id(request,device_id); folder,_=device_dirs(owner); event_device=owner
-    elif source=='web':
-        target=safe_device_id(target_device_id); devices=manager.devices(); targets=[target] if target else devices
-        if not targets: raise HTTPException(400,'No connected phone')
-        owner=targets[0]; event_device=owner; folders=[(did,device_dirs(did)[1]) for did in targets]
-    else:
-        owner=request_owner_id(request,device_id); folder,_=device_dirs(owner); event_device=owner
-    original=safe_name(file.filename); transfer_id=uuid4().hex; total=int(file.size or 0); received=0; last=-1
     if source=='web':
-        data=await file.read(); results=[]
-        for did,folder in folders:
-            filename=f'{transfer_id}__web__{did}__{original}'
-            destination=folder/filename
-            destination.write_bytes(data)
-            info=file_info(destination,'web',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
-            results.append(info)
-            await manager.send_to_device(did,{'type':'file_uploaded',**info})
-        return results[0]
-    filename=f'{uuid4().hex}__{source}__{owner}__{original}'; destination=folder/filename
+        web_client_dir(web_client_id)
+        targets=[safe_device_id(target_device_id)] if target_device_id else manager.devices()
+        targets=[d for d in targets if d]
+        if not targets: raise HTTPException(400,'No connected phone')
+        data=await file.read(); original=safe_name(file.filename); transfer_id=uuid4().hex; results=[]
+        for did in targets:
+            _,folder=device_dirs(did); destination=folder/f'{transfer_id}__web__{did}__{original}'; destination.write_bytes(data); info=file_info(destination,'web',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id; results.append(info); await manager.send_to_device(did,{'type':'file_uploaded',**info})
+        history_path=WEB_CLIENTS_DIR/safe_device_id(web_client_id)/'history.json'
+        try: history=json.loads(history_path.read_text(encoding='utf-8')) if history_path.exists() else []
+        except json.JSONDecodeError: history=[]
+        entry=dict(results[0]); entry['targets']=[r['device_id'] for r in results]; entry['source']='web'; history=[entry]+[x for x in history if x.get('transfer_id')!=transfer_id]; history=history[:500]; history_path.write_text(json.dumps(history,ensure_ascii=False,indent=2),encoding='utf-8')
+        return entry
+    owner=request_owner_id(request,device_id); folder,_=device_dirs(owner); original=safe_name(file.filename); transfer_id=uuid4().hex; total=int(file.size or 0); received=0; last=-1; destination=folder/f'{transfer_id}__{source}__{owner}__{original}'
     with destination.open('wb') as output:
         while chunk:=await file.read(1024*1024):
             output.write(chunk); received+=len(chunk)
             if total>0:
                 percent=int(received*100/total)
-                if percent!=last:
-                    last=percent
-                    await manager.send_to_device(event_device,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':event_device,'filename':original,'received':received,'total':total,'percent':min(100,percent)})
-    info=file_info(destination,'app' if source=='app' else 'received',owner); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
-    await manager.send_to_device(event_device,{'type':'file_uploaded',**info})
-    return info
+                if percent!=last: last=percent; await manager.send_to_device(owner,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'received':received,'total':total,'percent':min(100,percent)})
+    info=file_info(destination,'app' if source=='app' else 'received',owner); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id; await manager.send_to_device(owner,{'type':'file_uploaded',**info}); return info
 
 @app.post('/account/signup')
 def account_signup(name:str=Form(...),mobile:str=Form(...),username:str=Form(...),email:str=Form(...),password:str=Form(...)):
