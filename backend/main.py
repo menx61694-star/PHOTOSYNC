@@ -17,7 +17,7 @@ DEVICES_DIR.mkdir(parents=True, exist_ok=True)
 APP_PORT = 8000
 DISCOVERY_PORT = 8001
 DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
-app = FastAPI(title="PHOTOSYNC API", version="0.7.0")
+app = FastAPI(title="PHOTOSYNC API", version="0.7.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
 
@@ -47,7 +47,7 @@ def safe_name(name):
 def safe_device_id(value): return re.sub(r'[^A-Za-z0-9_-]','',value or '')[:128]
 
 def request_owner_id(request, supplied=''):
-    supplied=safe_device_id(supplied)
+    supplied=safe_device_id(supplied or request.headers.get('X-PhotoSync-Device-ID',''))
     if supplied: return supplied
     host=request.client.host if request.client else 'unknown'
     return 'ip_'+hashlib.sha256(host.encode()).hexdigest()[:24]
@@ -100,8 +100,10 @@ def files(request:Request,source:str|None=None,device_id:str|None=None):
     return list_dir(uploads,'app',owner)+list_dir(downloads,'received',owner)
 
 @app.get('/files/{device_id}/{source}/{filename}')
-def get_file(device_id:str,source:str,filename:str):
+def get_file(device_id:str,source:str,filename:str,request:Request):
     device_id=safe_device_id(device_id); filename=Path(filename).name
+    requester=request_owner_id(request,'')
+    if requester!=device_id: raise HTTPException(403,'File belongs to another device')
     if source not in {'app','received'}: raise HTTPException(404,'Not found')
     uploads,downloads=device_dirs(device_id); path=(uploads if source=='app' else downloads)/filename
     if not path.is_file(): raise HTTPException(404,'Not found')
@@ -110,8 +112,9 @@ def get_file(device_id:str,source:str,filename:str):
 
 @app.websocket('/ws')
 async def websocket_endpoint(websocket:WebSocket):
+    supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''))
     host=websocket.client.host if websocket.client else 'unknown'
-    device_id='ip_'+hashlib.sha256(host.encode()).hexdigest()[:24]
+    device_id=supplied or ('ip_'+hashlib.sha256(host.encode()).hexdigest()[:24])
     device_dirs(device_id)
     await manager.connect(websocket,device_id)
     await websocket.send_json({'type':'connection_info','device_id':device_id,'connections':len(manager.devices())})
