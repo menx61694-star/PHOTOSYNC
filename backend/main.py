@@ -124,17 +124,24 @@ async def websocket_endpoint(websocket:WebSocket):
 @app.post('/upload')
 async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form('')):
     source=source if source in {'web','app','unknown'} else 'unknown'
-    if source=='app': owner=request_owner_id(request,device_id); folder,_=device_dirs(owner); event_device=owner
+    if source=='app':
+        owner=request_owner_id(request,device_id); folder,_=device_dirs(owner); event_device=owner
     elif source=='web':
-        target=safe_device_id(target_device_id)
-        if not target:
-            devices=manager.devices()
-            if len(devices)==1: target=devices[0]
-            else: raise HTTPException(400,'Select a connected phone')
-        _,folder=device_dirs(target); owner=target; event_device=target
+        target=safe_device_id(target_device_id); devices=manager.devices(); targets=[target] if target else devices
+        if not targets: raise HTTPException(400,'No connected phone')
+        owner=targets[0]; event_device=owner; folders=[(did,device_dirs(did)[1]) for did in targets]
     else:
         owner=request_owner_id(request,device_id); folder,_=device_dirs(owner); event_device=owner
-    original=safe_name(file.filename); filename=f'{uuid4().hex}__{source}__{owner}__{original}'; destination=folder/filename; transfer_id=uuid4().hex; total=int(file.size or 0); received=0; last=-1
+    original=safe_name(file.filename); transfer_id=uuid4().hex; total=int(file.size or 0); received=0; last=-1
+    if source=='web':
+        data=await file.read()
+        results=[]
+        for did,folder in folders:
+            filename=f'{uuid4().hex}__web__{did}__{original}'; destination=folder/filename; destination.write_bytes(data)
+            info=file_info(destination,'received',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
+            results.append(info); await manager.send_to_device(did,{'type':'file_uploaded',**info})
+        return results[0]
+    filename=f'{uuid4().hex}__{source}__{owner}__{original}'; destination=folder/filename
     with destination.open('wb') as output:
         while chunk:=await file.read(1024*1024):
             output.write(chunk); received+=len(chunk)
