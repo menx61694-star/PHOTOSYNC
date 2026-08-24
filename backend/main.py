@@ -100,10 +100,8 @@ def files(request:Request,source:str|None=None,device_id:str|None=None):
     return list_dir(uploads,'app',owner)+list_dir(downloads,'received',owner)
 
 @app.get('/files/{device_id}/{source}/{filename}')
-def get_file(device_id:str,source:str,filename:str,request:Request):
+def get_file(device_id:str,source:str,filename:str):
     device_id=safe_device_id(device_id); filename=Path(filename).name
-    requester=request_owner_id(request,'')
-    if requester!=device_id: raise HTTPException(403,'File belongs to another device')
     if source not in {'app','received'}: raise HTTPException(404,'Not found')
     uploads,downloads=device_dirs(device_id); path=(uploads if source=='app' else downloads)/filename
     if not path.is_file(): raise HTTPException(404,'Not found')
