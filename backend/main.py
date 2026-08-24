@@ -17,7 +17,7 @@ DEVICES_DIR.mkdir(parents=True, exist_ok=True)
 APP_PORT = 8000
 DISCOVERY_PORT = 8001
 DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
-app = FastAPI(title="PHOTOSYNC API", version="0.7.4")
+app = FastAPI(title="PHOTOSYNC API", version="0.7.5")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
 
@@ -56,7 +56,11 @@ def device_dirs(device_id):
     d=DEVICES_DIR/safe_device_id(device_id); uploads=d/'uploads'; downloads=d/'downloads'; uploads.mkdir(parents=True,exist_ok=True); downloads.mkdir(parents=True,exist_ok=True); return uploads,downloads
 
 def file_info(path, source, device_id):
-    return {'filename':path.name.split('__',3)[-1] if '__' in path.name else path.name,'stored_filename':path.name,'url':f'/files/{safe_device_id(device_id)}/{source}/{path.name}','size':path.stat().st_size,'type':'image' if path.suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif','.bmp'} else 'file','source':source,'device_id':safe_device_id(device_id)}
+    parts=path.name.split('__')
+    info={'filename':parts[-1] if len(parts)>=2 else path.name,'stored_filename':path.name,'url':f'/files/{safe_device_id(device_id)}/{source}/{path.name}','size':path.stat().st_size,'type':'image' if path.suffix.lower() in {'.jpg','.jpeg','.png','.webp','.gif','.bmp'} else 'file','source':source,'device_id':safe_device_id(device_id)}
+    if source=='web' and parts and re.fullmatch(r'[0-9a-f]{32}',parts[0] or ''):
+        info['transfer_id']=parts[0]
+    return info
 
 class ConnectionManager:
     def __init__(self): self.connections={}
@@ -94,6 +98,12 @@ def list_all_devices(source):
             items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
             items.sort(key=lambda p:p.stat().st_mtime,reverse=True)
             result.extend(file_info(p,'web',d.name) for p in items)
+    if source=='web':
+        unique={}
+        for item in result:
+            key=item.get('transfer_id') or (item.get('filename',''),item.get('size',0))
+            if key not in unique: unique[key]=item
+        result=list(unique.values())
     result.sort(key=lambda x:x.get('stored_filename',''), reverse=True)
     return result
 
@@ -162,7 +172,7 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
     if source=='web':
         data=await file.read(); results=[]
         for did,folder in folders:
-            filename=f'{uuid4().hex}__web__{did}__{original}'; destination=folder/filename; destination.write_bytes(data)
+            filename=f'{transfer_id}__web__{did}__{original}'; destination=folder/filename; destination.write_bytes(data)
             info=file_info(destination,'web',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
             results.append(info); await manager.send_to_device(did,{'type':'file_uploaded',**info})
         return results[0]
