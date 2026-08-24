@@ -101,8 +101,6 @@ def list_all_devices(source):
         if source in {'app','received'}:
             result.extend(list_dir(uploads,'app',d.name))
         elif source=='web':
-            # Only canonical device folders are listed. IP mirror copies are storage
-            # mirrors and are deduplicated by transfer_id in the web UI/API.
             items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
             items.sort(key=lambda p:p.stat().st_mtime,reverse=True)
             result.extend(file_info(p,'web',d.name) for p in items)
@@ -116,7 +114,7 @@ def list_all_devices(source):
     return result
 
 @app.get('/')
-def root(): return {'dashboard':'/dashboard/','health':'/health','files':'/files','connections':'/connections','devices':'/devices','discovery_port':DISCOVERY_PORT}
+def root(): return {'dashboard':'/dashboard/','standalone':'/dashboard/standalone.html','health':'/health','files':'/files','connections':'/connections','devices':'/devices','discovery_port':DISCOVERY_PORT}
 @app.get('/health')
 def health(): return {'status':'ok'}
 @app.get('/connections')
@@ -186,17 +184,6 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
             info=file_info(destination,'web',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
             results.append(info)
             await manager.send_to_device(did,{'type':'file_uploaded',**info})
-
-            # Keep the canonical persistent-device copy above, and also mirror the
-            # same web transfer into the target phone's IP folder. This preserves
-            # compatibility with the older IP-based storage layout while the
-            # device-ID folder remains the canonical source for the web dashboard.
-            target_ip=manager.ip_for_device(did)
-            ip_id=ip_owner_id(target_ip)
-            if ip_id != did:
-                _,ip_downloads=device_dirs(ip_id)
-                ip_destination=ip_downloads/filename
-                ip_destination.write_bytes(data)
         return results[0]
     filename=f'{uuid4().hex}__{source}__{owner}__{original}'; destination=folder/filename
     with destination.open('wb') as output:
