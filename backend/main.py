@@ -17,7 +17,7 @@ DEVICES_DIR.mkdir(parents=True, exist_ok=True)
 APP_PORT = 8000
 DISCOVERY_PORT = 8001
 DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
-app = FastAPI(title="PHOTOSYNC API", version="0.7.3")
+app = FastAPI(title="PHOTOSYNC API", version="0.7.4")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
 
@@ -88,8 +88,13 @@ def list_all_devices(source):
     for d in DEVICES_DIR.iterdir() if DEVICES_DIR.exists() else []:
         if not d.is_dir() or safe_device_id(d.name)!=d.name: continue
         uploads,downloads=device_dirs(d.name)
-        result.extend(list_dir(uploads,'app',d.name) if source=='app' else list_dir(downloads,'received',d.name) if source=='received' else list_dir(uploads,'app',d.name)+list_dir(downloads,'received',d.name))
-    result.sort(key=lambda x: x.get('stored_filename',''), reverse=True)
+        if source in {'app','received'}:
+            result.extend(list_dir(uploads,'app',d.name))
+        elif source=='web':
+            items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
+            items.sort(key=lambda p:p.stat().st_mtime,reverse=True)
+            result.extend(file_info(p,'web',d.name) for p in items)
+    result.sort(key=lambda x:x.get('stored_filename',''), reverse=True)
     return result
 
 @app.get('/')
@@ -108,21 +113,21 @@ def devices():
 
 @app.get('/files')
 def files(request:Request,source:str|None=None,device_id:str|None=None,all:bool=False):
-    # The browser dashboard is not a phone, so it has no phone Device-ID header.
-    # `all=true` is an explicit server-dashboard request to aggregate stored files
-    # from every device folder while preserving each file's device_id in its URL.
     if all:
         return list_all_devices(source or '')
     owner=request_owner_id(request,device_id or '')
     uploads,downloads=device_dirs(owner)
     if source=='app': return list_dir(uploads,'app',owner)
     if source=='received': return list_dir(downloads,'received',owner)
+    if source=='web':
+        items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
+        return [file_info(p,'web',owner) for p in items]
     return list_dir(uploads,'app',owner)+list_dir(downloads,'received',owner)
 
 @app.get('/files/{device_id}/{source}/{filename}')
 def get_file(device_id:str,source:str,filename:str):
     device_id=safe_device_id(device_id); filename=Path(filename).name
-    if source not in {'app','received'}: raise HTTPException(404,'Not found')
+    if source not in {'app','received','web'}: raise HTTPException(404,'Not found')
     uploads,downloads=device_dirs(device_id); path=(uploads if source=='app' else downloads)/filename
     if not path.is_file(): raise HTTPException(404,'Not found')
     from fastapi.responses import FileResponse
@@ -158,7 +163,7 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
         data=await file.read(); results=[]
         for did,folder in folders:
             filename=f'{uuid4().hex}__web__{did}__{original}'; destination=folder/filename; destination.write_bytes(data)
-            info=file_info(destination,'received',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
+            info=file_info(destination,'web',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
             results.append(info); await manager.send_to_device(did,{'type':'file_uploaded',**info})
         return results[0]
     filename=f'{uuid4().hex}__{source}__{owner}__{original}'; destination=folder/filename
