@@ -17,7 +17,7 @@ DEVICES_DIR.mkdir(parents=True, exist_ok=True)
 APP_PORT = 8000
 DISCOVERY_PORT = 8001
 DISCOVERY_TOKEN = "PHOTOSYNC_DISCOVER_V1"
-app = FastAPI(title="PHOTOSYNC API", version="0.7.2")
+app = FastAPI(title="PHOTOSYNC API", version="0.7.3")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="dashboard")
 
@@ -83,6 +83,15 @@ def list_dir(path,source,device_id):
     items=[p for p in path.iterdir() if p.is_file() and not p.name.startswith('.')]; items.sort(key=lambda p:p.stat().st_mtime,reverse=True)
     return [file_info(p,source,device_id) for p in items]
 
+def list_all_devices(source):
+    result=[]
+    for d in DEVICES_DIR.iterdir() if DEVICES_DIR.exists() else []:
+        if not d.is_dir() or safe_device_id(d.name)!=d.name: continue
+        uploads,downloads=device_dirs(d.name)
+        result.extend(list_dir(uploads,'app',d.name) if source=='app' else list_dir(downloads,'received',d.name) if source=='received' else list_dir(uploads,'app',d.name)+list_dir(downloads,'received',d.name))
+    result.sort(key=lambda x: x.get('stored_filename',''), reverse=True)
+    return result
+
 @app.get('/')
 def root(): return {'dashboard':'/dashboard/','health':'/health','files':'/files','connections':'/connections','devices':'/devices','discovery_port':DISCOVERY_PORT}
 @app.get('/health')
@@ -98,7 +107,12 @@ def devices():
     return {'devices':sorted(set(stored) | set(manager.devices()))}
 
 @app.get('/files')
-def files(request:Request,source:str|None=None,device_id:str|None=None):
+def files(request:Request,source:str|None=None,device_id:str|None=None,all:bool=False):
+    # The browser dashboard is not a phone, so it has no phone Device-ID header.
+    # `all=true` is an explicit server-dashboard request to aggregate stored files
+    # from every device folder while preserving each file's device_id in its URL.
+    if all:
+        return list_all_devices(source or '')
     owner=request_owner_id(request,device_id or '')
     uploads,downloads=device_dirs(owner)
     if source=='app': return list_dir(uploads,'app',owner)
