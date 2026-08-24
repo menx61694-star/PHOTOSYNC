@@ -45,12 +45,13 @@ def _clean_text(value,max_len): return re.sub(r'\s+',' ',(value or '').strip())[
 def safe_name(name):
     name=Path(name or 'file').name; name=re.sub(r'[^A-Za-z0-9._-]+','_',name).strip('._'); return name[:180] or 'file'
 def safe_device_id(value): return re.sub(r'[^A-Za-z0-9_-]','',value or '')[:128]
+def ip_owner_id(host): return 'ip_'+hashlib.sha256((host or 'unknown').encode()).hexdigest()[:24]
 
 def request_owner_id(request, supplied=''):
     supplied=safe_device_id(supplied or request.headers.get('X-PhotoSync-Device-ID',''))
     if supplied: return supplied
     host=request.client.host if request.client else 'unknown'
-    return 'ip_'+hashlib.sha256(host.encode()).hexdigest()[:24]
+    return ip_owner_id(host)
 
 def device_dirs(device_id):
     d=DEVICES_DIR/safe_device_id(device_id); uploads=d/'uploads'; downloads=d/'downloads'; uploads.mkdir(parents=True,exist_ok=True); downloads.mkdir(parents=True,exist_ok=True); return uploads,downloads
@@ -63,10 +64,15 @@ def file_info(path, source, device_id):
     return info
 
 class ConnectionManager:
-    def __init__(self): self.connections={}
-    async def connect(self,ws,device_id): await ws.accept(); self.connections[ws]=device_id
-    def disconnect(self,ws): self.connections.pop(ws,None)
+    def __init__(self): self.connections={}; self.connection_ips={}
+    async def connect(self,ws,device_id):
+        await ws.accept(); self.connections[ws]=device_id; self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
+    def disconnect(self,ws): self.connections.pop(ws,None); self.connection_ips.pop(ws,None)
     def devices(self): return sorted(set(self.connections.values()))
+    def ip_for_device(self,device_id):
+        for ws,did in list(self.connections.items()):
+            if did==device_id: return self.connection_ips.get(ws,'unknown')
+        return 'unknown'
     async def send_to_device(self,device_id,message):
         dead=[]
         for ws,did in list(self.connections.items()):
@@ -95,6 +101,8 @@ def list_all_devices(source):
         if source in {'app','received'}:
             result.extend(list_dir(uploads,'app',d.name))
         elif source=='web':
+            # Only canonical device folders are listed. IP mirror copies are storage
+            # mirrors and are deduplicated by transfer_id in the web UI/API.
             items=[p for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
             items.sort(key=lambda p:p.stat().st_mtime,reverse=True)
             result.extend(file_info(p,'web',d.name) for p in items)
@@ -113,7 +121,7 @@ def root(): return {'dashboard':'/dashboard/','health':'/health','files':'/files
 def health(): return {'status':'ok'}
 @app.get('/connections')
 def connections():
-    devices=manager.devices(); return {'count':len(devices),'devices':[{'device_id':d} for d in devices]}
+    devices=manager.devices(); return {'count':len(devices),'devices':[{'device_id':d,'ip':manager.ip_for_device(d)} for d in devices]}
 @app.get('/devices')
 def devices():
     stored=[]
@@ -147,10 +155,10 @@ def get_file(device_id:str,source:str,filename:str):
 async def websocket_endpoint(websocket:WebSocket):
     supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''))
     host=websocket.client.host if websocket.client else 'unknown'
-    device_id=supplied or ('ip_'+hashlib.sha256(host.encode()).hexdigest()[:24])
+    device_id=supplied or ip_owner_id(host)
     device_dirs(device_id)
     await manager.connect(websocket,device_id)
-    await websocket.send_json({'type':'connection_info','device_id':device_id,'connections':len(manager.devices())})
+    await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'connections':len(manager.devices())})
     await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
     try:
         while True: await websocket.receive_text()
@@ -172,9 +180,23 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
     if source=='web':
         data=await file.read(); results=[]
         for did,folder in folders:
-            filename=f'{transfer_id}__web__{did}__{original}'; destination=folder/filename; destination.write_bytes(data)
+            filename=f'{transfer_id}__web__{did}__{original}'
+            destination=folder/filename
+            destination.write_bytes(data)
             info=file_info(destination,'web',did); info['content_type']=file.content_type or 'application/octet-stream'; info['transfer_id']=transfer_id
-            results.append(info); await manager.send_to_device(did,{'type':'file_uploaded',**info})
+            results.append(info)
+            await manager.send_to_device(did,{'type':'file_uploaded',**info})
+
+            # Keep the canonical persistent-device copy above, and also mirror the
+            # same web transfer into the target phone's IP folder. This preserves
+            # compatibility with the older IP-based storage layout while the
+            # device-ID folder remains the canonical source for the web dashboard.
+            target_ip=manager.ip_for_device(did)
+            ip_id=ip_owner_id(target_ip)
+            if ip_id != did:
+                _,ip_downloads=device_dirs(ip_id)
+                ip_destination=ip_downloads/filename
+                ip_destination.write_bytes(data)
         return results[0]
     filename=f'{uuid4().hex}__{source}__{owner}__{original}'; destination=folder/filename
     with destination.open('wb') as output:
