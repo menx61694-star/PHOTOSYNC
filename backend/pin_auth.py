@@ -157,6 +157,9 @@ _PUBLIC_PREFIXES = ("/dashboard",)
 _APP_TRUST_HEADER = "X-PhotoSync-Device-ID"
 _SESSION_HEADER = "X-PhotoSync-Session"
 _SESSION_QUERY = "session"
+_PAIR_PIN_HEADER = "X-PhotoSync-Pair-PIN"
+_PAIR_IP_HEADER = "X-PhotoSync-Device-IP"
+_PAIR_DEVICE_HEADER = "X-PhotoSync-Device-ID"
 
 
 def _request_session(request: Request):
@@ -176,7 +179,7 @@ def install(app):
             "message": "Enter the PIN shown for the selected phone in the PhotoSync app",
         }
 
-    # Compatibility endpoint. It requires a selected phone IP because the PC
+    # Compatibility endpoint. It requires a selected phone because the PC
     # server itself does not own a PIN.
     @app.post("/api/pair")
     def pair_endpoint(request: Request, pin: str, device_ip: str = "", device_id: str = ""):
@@ -203,14 +206,13 @@ def install(app):
     async def pin_gate(request: Request, call_next):
         path = request.url.path
 
-        # Browser pairing is per-phone: the browser supplies the selected
-        # phone's IP/device id and the PIN displayed by that phone's app.
-        # The middleware validates the PIN against the phone, then lets the
-        # existing /web-client/pair endpoint persist the web-client pairing.
+        # Browser pairing is per-phone. The PIN stays in a request header and
+        # is immediately forwarded to the selected phone; it is never stored
+        # in the PC server's files or configuration.
         if path == "/web-client/pair":
-            pin = request.query_params.get("pin", "").strip()
-            phone_ip = request.query_params.get("device_ip", "").strip()
-            device_id = request.query_params.get("device_id", "").strip()
+            pin = request.headers.get(_PAIR_PIN_HEADER, "").strip()
+            phone_ip = request.headers.get(_PAIR_IP_HEADER, "").strip()
+            device_id = request.headers.get(_PAIR_DEVICE_HEADER, "").strip()
             if request.method != "POST":
                 return JSONResponse({"detail": "Method not allowed"}, status_code=405)
             if not pin or not phone_ip or not device_id:
