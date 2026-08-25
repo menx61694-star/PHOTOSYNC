@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pin_auth import install as install_pin_auth
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
@@ -22,6 +23,7 @@ DISCOVERY_TOKEN='PHOTOSYNC_DISCOVER_V1'
 app=FastAPI(title='PHOTOSYNC API',version='0.9.1')
 app.add_middleware(CORSMiddleware,allow_origins=['*'],allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 app.mount('/dashboard',StaticFiles(directory=WEB_DIR,html=True),name='dashboard')
+install_pin_auth(app)
 _accounts_lock=threading.Lock()
 
 def _load_accounts():
