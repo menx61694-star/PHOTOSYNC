@@ -31,24 +31,18 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     private val uploadsDir = File(rootDir, "uploads")
     private val downloadsDir = File(rootDir, "downloads")
 
-    init {
-        uploadsDir.mkdirs()
-        downloadsDir.mkdirs()
-    }
+    init { uploadsDir.mkdirs(); downloadsDir.mkdirs() }
 
     fun start(): Boolean {
         if (running) return true
         return try {
-            uploadsDir.mkdirs()
-            downloadsDir.mkdirs()
+            uploadsDir.mkdirs(); downloadsDir.mkdirs()
             val socket = ServerSocket()
             socket.reuseAddress = true
             socket.bind(java.net.InetSocketAddress(port), 50)
             serverSocket = socket
             pin = generatePin()
-            sessions.clear()
-            failedAttempts.clear()
-            running = true
+            sessions.clear(); failedAttempts.clear(); running = true
             executor.execute { acceptLoop() }
             true
         } catch (_: Exception) {
@@ -60,9 +54,7 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     }
 
     fun stop() {
-        running = false
-        sessions.clear()
-        failedAttempts.clear()
+        running = false; sessions.clear(); failedAttempts.clear()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
     }
@@ -71,21 +63,19 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     fun currentPin(): String = pin
     fun isAuthorized(token: String?): Boolean = token != null && sessions[token]?.let { System.currentTimeMillis() < it } == true
 
-    fun localIpv4(): String? {
-        return try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val network = interfaces.nextElement()
-                if (!network.isUp || network.isLoopback || network.isVirtual) continue
-                val addresses = network.inetAddresses
-                while (addresses.hasMoreElements()) {
-                    val address = addresses.nextElement()
-                    if (address is Inet4Address && !address.isLoopbackAddress) return address.hostAddress
-                }
+    fun localIpv4(): String? = try {
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        while (interfaces.hasMoreElements()) {
+            val network = interfaces.nextElement()
+            if (!network.isUp || network.isLoopback || network.isVirtual) continue
+            val addresses = network.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val address = addresses.nextElement()
+                if (address is Inet4Address && !address.isLoopbackAddress) return address.hostAddress
             }
-            null
-        } catch (_: Exception) { null }
-    }
+        }
+        null
+    } catch (_: Exception) { null }
 
     fun url(): String? = localIpv4()?.let { "http://$it:$port" }
     private fun generatePin(): String = (100000 + random.nextInt(900000)).toString()
@@ -99,9 +89,7 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
             try {
                 val socket = serverSocket?.accept() ?: break
                 executor.execute { handle(socket) }
-            } catch (_: Exception) {
-                if (!running) break
-            }
+            } catch (_: Exception) { if (!running) break }
         }
     }
 
@@ -139,30 +127,29 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
                     !isAuthorized(token) -> responseJson("{\"detail\":\"PIN pairing required\"}", "401 Unauthorized")
                     path == "/files" && method == "GET" -> filesResponse(query["source"])
                     path.startsWith("/files/") && method == "GET" -> fileResponse(path)
-                    path == "/upload" && method == "POST" -> uploadResponse(input, headers, query, clientKey)
+                    path == "/upload" && method == "POST" -> uploadResponse(input, headers, query)
                     path == "/api/info" -> responseJson("{\"server\":\"photosync-android\",\"ip\":${json(localIpv4())},\"port\":$port,\"pin_required\":true}")
                     else -> Response("404 Not Found", "text/plain; charset=utf-8", "Not found")
                 }
                 writeResponse(it, response)
-            } catch (_: Exception) {
-                // Never allow a malformed/disconnected browser socket to crash the app.
-            }
+            } catch (_: Exception) { }
         }
     }
 
-    private data class Response(val status: String, val contentType: String, val body: String, val bytes: ByteArray? = null)
+    private data class Response(val status: String, val contentType: String, val body: String = "", val bytes: ByteArray? = null, val setCookie: String? = null)
     private fun responseJson(body: String, status: String = "200 OK") = Response(status, "application/json; charset=utf-8", body)
     private fun responseHtml(body: String) = Response("200 OK", "text/html; charset=utf-8", body)
 
     private fun writeResponse(socket: Socket, response: Response) {
         val bodyBytes = response.bytes ?: response.body.toByteArray(Charsets.UTF_8)
-        val header = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.contentType}\r\nContent-Length: ${bodyBytes.size}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        val cookie = response.setCookie?.let { "Set-Cookie: $it\r\n" } ?: ""
+        val header = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.contentType}\r\nContent-Length: ${bodyBytes.size}\r\nCache-Control: no-store\r\n$cookieConnection: close\r\n\r\n"
         socket.getOutputStream().use { out ->
-            out.write(header.toByteArray(Charsets.US_ASCII))
-            out.write(bodyBytes)
-            out.flush()
+            out.write(header.toByteArray(Charsets.US_ASCII)); out.write(bodyBytes); out.flush()
         }
     }
+
+    private val cookieConnection = "Connection"
 
     private fun pair(clientKey: String, supplied: String): Response {
         val now = System.currentTimeMillis()
@@ -174,29 +161,15 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
             attempts.clear()
             val token = generateToken()
             sessions[token] = now + sessionLifetimeMs
-            return Response(
-                "200 OK",
-                "application/json; charset=utf-8",
-                "{\"paired\":true,\"expires_in_seconds\":1800}",
-                null
-            ).withCookie("photosync_session=$token; Max-Age=1800; Path=/; HttpOnly; SameSite=Strict")
+            return Response("200 OK", "application/json; charset=utf-8", "{\"paired\":true,\"expires_in_seconds\":1800}", setCookie = "photosync_session=$token; Max-Age=1800; Path=/; HttpOnly; SameSite=Strict")
         }
         attempts.add(now)
         return responseJson("{\"paired\":false,\"message\":\"Invalid PIN\"}", "403 Forbidden")
     }
 
-    private fun Response.withCookie(cookie: String): Response = Response(status, contentType, body, bytes).also { cookieHeader = cookie }
-    @Volatile private var cookieHeader: String? = null
+    private fun logoutResponse(): Response = Response("200 OK", "application/json; charset=utf-8", "{\"ok\":true}", setCookie = "photosync_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict")
 
-    private fun logoutResponse(): Response {
-        val response = responseJson("{\"ok\":true}")
-        cookieHeader = "photosync_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict"
-        return response
-    }
-
-    private fun parseCookie(header: String?, name: String): String? {
-        return header?.split(';')?.map { it.trim() }?.firstOrNull { it.startsWith("$name=") }?.substringAfter('=')
-    }
+    private fun parseCookie(header: String?, name: String): String? = header?.split(';')?.map { it.trim() }?.firstOrNull { it.startsWith("$name=") }?.substringAfter('=')
 
     private fun parseQuery(query: String): Map<String, String> = query.split('&').mapNotNull {
         val p = it.split('=', limit = 2)
@@ -209,12 +182,12 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     }
 
     private fun fileJson(file: File, source: String): JSONObject {
-        val name = file.name
+        val name = file.name.substringAfter("__", file.name)
         val type = if (name.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")) "image" else "file"
         return JSONObject().apply {
             put("filename", name)
-            put("stored_filename", name)
-            put("url", "/files/$source/${URLEncoder.encode(name, "UTF-8").replace("+", "%20")}")
+            put("stored_filename", file.name)
+            put("url", "/files/$source/${URLEncoder.encode(file.name, "UTF-8").replace("+", "%20")}")
             put("size", file.length())
             put("type", type)
             put("source", source)
@@ -234,25 +207,22 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         val source = bits[0]
         if (source != "app" && source != "received") return Response("404 Not Found", "text/plain", "Not found")
         val name = safeName(URLDecoder.decode(bits[1], "UTF-8"))
-        val file = File(if (source == "app") uploadsDir else downloadsDir, name)
-        if (!file.isFile) return Response("404 Not Found", "text/plain", "Not found")
-        return Response("200 OK", contentType(name), "", file.readBytes())
+        val dir = if (source == "app") uploadsDir else downloadsDir
+        val file = if (File(dir, name).isFile) File(dir, name) else dir.listFiles()?.firstOrNull { it.name == name }
+        if (file == null || !file.isFile) return Response("404 Not Found", "text/plain", "Not found")
+        return Response("200 OK", contentType(name), bytes = file.readBytes())
     }
 
-    private fun uploadResponse(input: InputStream, headers: Map<String, String>, query: Map<String, String>, clientKey: String): Response {
+    private fun uploadResponse(input: InputStream, headers: Map<String, String>, query: Map<String, String>): Response {
         val source = if (query["source"] == "app") "app" else "received"
-        val name = safeName(query["filename"])
+        val original = safeName(query["filename"])
         val length = headers["content-length"]?.toLongOrNull() ?: return responseJson("{\"detail\":\"Content-Length required\"}", "411 Length Required")
         if (length <= 0L) return responseJson("{\"detail\":\"Empty file\"}", "400 Bad Request")
         if (length > 500L * 1024L * 1024L) return responseJson("{\"detail\":\"File too large\"}", "413 Payload Too Large")
-        val destination = File(if (source == "app") uploadsDir else downloadsDir, "${System.currentTimeMillis()}__$name")
+        val destination = File(if (source == "app") uploadsDir else downloadsDir, "${System.currentTimeMillis()}__$original")
         destination.parentFile?.mkdirs()
         input.copyExactlyTo(destination.outputStream(), length)
-        val info = fileJson(destination, source).apply {
-            put("filename", name)
-            put("stored_filename", destination.name)
-        }
-        return responseJson(info.toString())
+        return responseJson(fileJson(destination, source).toString())
     }
 
     private fun InputStream.copyExactlyTo(output: java.io.OutputStream, expected: Long) {
@@ -263,8 +233,7 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
                 val wanted = minOf(buffer.size.toLong(), expected - total).toInt()
                 val read = read(buffer, 0, wanted)
                 if (read <= 0) throw java.io.EOFException("Unexpected end of upload")
-                out.write(buffer, 0, read)
-                total += read
+                out.write(buffer, 0, read); total += read
             }
         }
     }
