@@ -6,10 +6,8 @@ from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
 # Browser authentication for the external Python server.
-# A random server PIN creates a short-lived session. Browser clients may carry
-# that session in a header as well as the normal cookie so a standalone page
-# hosted by another PhotoSync server can safely connect over the LAN without
-# relying on third-party cookies.
+# The PIN protects browser pairing. A successful pairing creates a short-lived
+# session which is carried by an HttpOnly cookie or an explicit session header.
 PIN = f"{secrets.randbelow(900000) + 100000:06d}"
 SESSION_TTL_SECONDS = 30 * 60
 MAX_ATTEMPTS_PER_MINUTE = 5
@@ -40,7 +38,7 @@ def _client_ip(request: Request):
     return request.client.host if request.client else "unknown"
 
 
-def pair(pin: str, request: Request):
+def _check_pin(pin: str, request: Request):
     now = time.time()
     ip = _client_ip(request)
     with _lock:
@@ -49,12 +47,17 @@ def pair(pin: str, request: Request):
             attempts.popleft()
         if len(attempts) >= MAX_ATTEMPTS_PER_MINUTE:
             raise HTTPException(429, "Too many PIN attempts; try again later")
-        if pin != PIN:
+        if pin.strip() != PIN:
             attempts.append(now)
             raise HTTPException(403, "Invalid PIN")
         attempts.clear()
         token = secrets.token_urlsafe(32)
         _sessions[token] = now + SESSION_TTL_SECONDS
+    return token
+
+
+def pair(pin: str, request: Request):
+    token = _check_pin(pin, request)
     response = JSONResponse({
         "paired": True,
         "session_token": token,
@@ -85,10 +88,13 @@ _PUBLIC_EXACT = {
     "/api/pair",
     "/api/session",
     "/api/logout",
+    "/web-client/session",
+    "/connections",
 }
 _PUBLIC_PREFIXES = ("/dashboard",)
 _APP_TRUST_HEADER = "X-PhotoSync-Device-ID"
 _SESSION_HEADER = "X-PhotoSync-Session"
+_PAIR_PIN_HEADER = "X-PhotoSync-Pair-PIN"
 _SESSION_QUERY = "session"
 
 
@@ -122,13 +128,36 @@ def install(app):
     @app.middleware("http")
     async def pin_gate(request: Request, call_next):
         path = request.url.path
+
+        # These endpoints are needed to bootstrap the browser pairing flow.
+        # They do not expose file contents.
         if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
-        # Android app API calls are trusted by their existing device header.
+
+        # Android app API calls use the existing device identity header.
         if request.headers.get(_APP_TRUST_HEADER):
             return await call_next(request)
-        # Same-origin dashboard uses the secure HttpOnly cookie; an external
-        # standalone page uses the short-lived session header or query token.
+
+        # Browser pairing is allowed only when the current server PIN is sent
+        # in a dedicated header. On success we create the same short-lived
+        # session used by the normal /api/pair endpoint, then let the actual
+        # /web-client/pair route run normally.
+        if path == "/web-client/pair":
+            pair_pin = request.headers.get(_PAIR_PIN_HEADER, "")
+            if pair_pin:
+                token = _check_pin(pair_pin, request)
+                response = await call_next(request)
+                response.set_cookie(
+                    key="photosync_session",
+                    value=token,
+                    max_age=SESSION_TTL_SECONDS,
+                    httponly=True,
+                    samesite="strict",
+                    secure=False,
+                    path="/",
+                )
+                return response
+
         token = _request_session(request)
         if valid_session(token):
             return await call_next(request)
