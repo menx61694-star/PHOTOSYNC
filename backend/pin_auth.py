@@ -4,7 +4,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from urllib.parse import urlencode
-from urllib.request import Request as UrlRequest, urlopen
+from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -17,6 +17,7 @@ _LOCAL_SERVER_PORT = 18000
 _sessions = {}
 _attempts = defaultdict(deque)
 _lock = threading.Lock()
+_direct_opener = build_opener(ProxyHandler({}))
 
 
 def _cleanup(now=None):
@@ -74,13 +75,13 @@ def _verify_phone_pin(phone_ip: str, pin: str):
     url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}/api/pair?{query}"
     try:
         req = UrlRequest(url, method="POST", headers={"Cache-Control": "no-store"})
-        with urlopen(req, timeout=2.5) as response:
+        with _direct_opener.open(req, timeout=2.5) as response:
             return 200 <= response.status < 300
     except Exception:
         # Compatibility with older Android local-server builds that accepted
         # the pairing request through GET.
         try:
-            with urlopen(url, timeout=2.5) as response:
+            with _direct_opener.open(url, timeout=2.5) as response:
                 return 200 <= response.status < 300
         except Exception:
             return False
@@ -140,6 +141,26 @@ def logout(token=None):
     response = JSONResponse({"ok": True})
     response.delete_cookie("photosync_session", path="/")
     return response
+
+
+def _live_app_request(request: Request):
+    """Trust the app identity only when it matches a live WebSocket peer IP."""
+    device_id = (request.headers.get("X-PhotoSync-Device-ID") or "").strip()
+    if not device_id:
+        return False
+    client_ip = _client_ip(request)
+    try:
+        import main as server_main
+        manager = getattr(server_main, "manager", None)
+        if manager is None:
+            return False
+        for ws, did in list(manager.connections.items()):
+            ws_ip = manager.connection_ips.get(ws, "")
+            if did == device_id and ws_ip == client_ip:
+                return True
+    except Exception:
+        return False
+    return False
 
 
 _PUBLIC_EXACT = {
@@ -233,8 +254,10 @@ def install(app):
         if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        # Android app API calls use the existing device identity header.
-        if request.headers.get(_APP_TRUST_HEADER):
+        # A device header alone is not sufficient: browsers can spoof headers.
+        # Require the request source IP to match the live WebSocket connection
+        # registered for that device ID.
+        if request.headers.get(_APP_TRUST_HEADER) and _live_app_request(request):
             return await call_next(request)
 
         token = _request_session(request)
