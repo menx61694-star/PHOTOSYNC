@@ -7,6 +7,7 @@ import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 class LocalServer(private val port: Int = 18000) {
@@ -15,11 +16,17 @@ class LocalServer(private val port: Int = 18000) {
     private val executor = Executors.newCachedThreadPool()
     private val random = SecureRandom()
     @Volatile private var pin: String = generatePin()
+    private val sessions = ConcurrentHashMap<String, Long>()
+    private val failedAttempts = ConcurrentHashMap<String, MutableList<Long>>()
+    private val sessionLifetimeMs = 30 * 60 * 1000L
+    private val maxAttemptsPerMinute = 5
 
     fun start(): Boolean {
         if (running) return true
         return try {
             pin = generatePin()
+            sessions.clear()
+            failedAttempts.clear()
             serverSocket = ServerSocket(port, 50)
             running = true
             executor.execute { acceptLoop() }
@@ -34,12 +41,15 @@ class LocalServer(private val port: Int = 18000) {
 
     fun stop() {
         running = false
+        sessions.clear()
+        failedAttempts.clear()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
     }
 
     fun isRunning(): Boolean = running && serverSocket?.isClosed == false
     fun currentPin(): String = pin
+    fun isAuthorized(token: String?): Boolean = token != null && sessions[token]?.let { System.currentTimeMillis() < it } == true
 
     fun localIpv4(): String? = try {
         NetworkInterface.getNetworkInterfaces().toList().asSequence()
@@ -53,6 +63,10 @@ class LocalServer(private val port: Int = 18000) {
     fun url(): String? = localIpv4()?.let { "http://$it:$port" }
 
     private fun generatePin(): String = (100000 + random.nextInt(900000)).toString()
+    private fun generateToken(): String = buildString(32) {
+        val chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        repeat(32) { append(chars[random.nextInt(chars.length)]) }
+    }
 
     private fun acceptLoop() {
         while (running) {
@@ -79,24 +93,55 @@ class LocalServer(private val port: Int = 18000) {
             val rawPath = parts.getOrNull(1) ?: "/"
             val path = rawPath.substringBefore('?')
             val query = parseQuery(rawPath.substringAfter('?', ""))
+            val clientKey = socket.inetAddress?.hostAddress ?: "unknown"
 
             val body: String
             val status: String
-            if (path == "/api/pin") {
-                body = "{\"pin_required\":true,\"message\":\"Enter the PIN shown on the phone\"}"
-                status = "200 OK"
-            } else if (path == "/api/pair" && method == "POST") {
-                val supplied = query["pin"] ?: ""
-                val ok = supplied.length == 6 && supplied == pin
-                body = if (ok) "{\"paired\":true,\"message\":\"Pairing approved\"}" else "{\"paired\":false,\"message\":\"Invalid PIN\"}"
-                status = if (ok) "200 OK" else "403 Forbidden"
-            } else {
-                body = when (path) {
-                    "/health" -> "{\"status\":\"ok\",\"server\":\"photosync-android\"}"
-                    "/api/info" -> "{\"server\":\"photosync-android\",\"ip\":${json(localIpv4())},\"port\":$port,\"pin_required\":true}"
-                    else -> page()
+            when {
+                path == "/api/pin" -> {
+                    body = "{\"pin_required\":true,\"message\":\"Enter the PIN shown on the phone\"}"
+                    status = "200 OK"
                 }
-                status = "200 OK"
+                path == "/api/pair" && method == "POST" -> {
+                    val supplied = query["pin"] ?: ""
+                    val now = System.currentTimeMillis()
+                    val attempts = failedAttempts.compute(clientKey) { _, old ->
+                        val fresh = (old ?: mutableListOf()).filter { now - it < 60_000 }.toMutableList()
+                        fresh
+                    } ?: mutableListOf()
+                    if (attempts.size >= maxAttemptsPerMinute) {
+                        body = "{\"paired\":false,\"message\":\"Too many attempts; try again later\"}"
+                        status = "429 Too Many Requests"
+                    } else if (supplied.length == 6 && supplied == pin) {
+                        attempts.clear()
+                        val token = generateToken()
+                        sessions[token] = now + sessionLifetimeMs
+                        body = "{\"paired\":true,\"token\":\"$token\",\"expires_in_seconds\":1800}"
+                        status = "200 OK"
+                    } else {
+                        attempts.add(now)
+                        body = "{\"paired\":false,\"message\":\"Invalid PIN\"}"
+                        status = "403 Forbidden"
+                    }
+                }
+                path == "/api/session" -> {
+                    val token = query["token"]
+                    val ok = isAuthorized(token)
+                    body = if (ok) "{\"authorized\":true,\"expires_in_seconds\":${((sessions[token]!! - System.currentTimeMillis()) / 1000).coerceAtLeast(0)}}" else "{\"authorized\":false}"
+                    status = if (ok) "200 OK" else "401 Unauthorized"
+                }
+                path == "/health" -> {
+                    body = "{\"status\":\"ok\",\"server\":\"photosync-android\"}"
+                    status = "200 OK"
+                }
+                path == "/api/info" -> {
+                    body = "{\"server\":\"photosync-android\",\"ip\":${json(localIpv4())},\"port\":$port,\"pin_required\":true}"
+                    status = "200 OK"
+                }
+                else -> {
+                    body = page()
+                    status = "200 OK"
+                }
             }
             val contentType = if (body.startsWith("{")) "application/json; charset=utf-8" else "text/html; charset=utf-8"
             val bytes = body.toByteArray(Charsets.UTF_8)
