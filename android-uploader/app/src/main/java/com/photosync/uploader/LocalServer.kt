@@ -3,10 +3,9 @@ package com.photosync.uploader
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
-import java.io.InputStreamReader
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -93,16 +92,25 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         }
     }
 
+    private fun readAsciiLine(input: InputStream): String? {
+        val out = StringBuilder()
+        while (true) {
+            val b = input.read()
+            if (b < 0) return if (out.isEmpty()) null else out.toString()
+            if (b == '\n'.code) return out.toString().removeSuffix("\r")
+            if (out.length < 8192) out.append(b.toChar())
+        }
+    }
+
     private fun handle(socket: Socket) {
         socket.use {
             try {
                 it.soTimeout = 15_000
-                val input = it.getInputStream()
-                val reader = BufferedReader(InputStreamReader(input, Charsets.US_ASCII))
-                val requestLine = reader.readLine() ?: return
+                val input = BufferedInputStream(it.getInputStream(), 64 * 1024)
+                val requestLine = readAsciiLine(input) ?: return
                 val headers = mutableMapOf<String, String>()
                 while (true) {
-                    val line = reader.readLine() ?: break
+                    val line = readAsciiLine(input) ?: break
                     if (line.isEmpty()) break
                     val colon = line.indexOf(':')
                     if (colon > 0) headers[line.substring(0, colon).trim().lowercase()] = line.substring(colon + 1).trim()
@@ -143,13 +151,11 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     private fun writeResponse(socket: Socket, response: Response) {
         val bodyBytes = response.bytes ?: response.body.toByteArray(Charsets.UTF_8)
         val cookie = response.setCookie?.let { "Set-Cookie: $it\r\n" } ?: ""
-        val header = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.contentType}\r\nContent-Length: ${bodyBytes.size}\r\nCache-Control: no-store\r\n$cookieConnection: close\r\n\r\n"
+        val header = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.contentType}\r\nContent-Length: ${bodyBytes.size}\r\nCache-Control: no-store\r\n${cookie}Connection: close\r\n\r\n"
         socket.getOutputStream().use { out ->
             out.write(header.toByteArray(Charsets.US_ASCII)); out.write(bodyBytes); out.flush()
         }
     }
-
-    private val cookieConnection = "Connection"
 
     private fun pair(clientKey: String, supplied: String): Response {
         val now = System.currentTimeMillis()
@@ -168,13 +174,8 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     }
 
     private fun logoutResponse(): Response = Response("200 OK", "application/json; charset=utf-8", "{\"ok\":true}", setCookie = "photosync_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict")
-
     private fun parseCookie(header: String?, name: String): String? = header?.split(';')?.map { it.trim() }?.firstOrNull { it.startsWith("$name=") }?.substringAfter('=')
-
-    private fun parseQuery(query: String): Map<String, String> = query.split('&').mapNotNull {
-        val p = it.split('=', limit = 2)
-        if (p.size == 2) p[0] to URLDecoder.decode(p[1], "UTF-8") else null
-    }.toMap()
+    private fun parseQuery(query: String): Map<String, String> = query.split('&').mapNotNull { val p = it.split('=', limit = 2); if (p.size == 2) p[0] to URLDecoder.decode(p[1], "UTF-8") else null }.toMap()
 
     private fun safeName(value: String?): String {
         val raw = File(value ?: "file").name
@@ -185,12 +186,9 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         val name = file.name.substringAfter("__", file.name)
         val type = if (name.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")) "image" else "file"
         return JSONObject().apply {
-            put("filename", name)
-            put("stored_filename", file.name)
+            put("filename", name); put("stored_filename", file.name)
             put("url", "/files/$source/${URLEncoder.encode(file.name, "UTF-8").replace("+", "%20")}")
-            put("size", file.length())
-            put("type", type)
-            put("source", source)
+            put("size", file.length()); put("type", type); put("source", source)
         }
     }
 
@@ -208,7 +206,7 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         if (source != "app" && source != "received") return Response("404 Not Found", "text/plain", "Not found")
         val name = safeName(URLDecoder.decode(bits[1], "UTF-8"))
         val dir = if (source == "app") uploadsDir else downloadsDir
-        val file = if (File(dir, name).isFile) File(dir, name) else dir.listFiles()?.firstOrNull { it.name == name }
+        val file = dir.listFiles()?.firstOrNull { it.name == name }
         if (file == null || !file.isFile) return Response("404 Not Found", "text/plain", "Not found")
         return Response("200 OK", contentType(name), bytes = file.readBytes())
     }
@@ -239,14 +237,7 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     }
 
     private fun contentType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "jpg", "jpeg" -> "image/jpeg"
-        "png" -> "image/png"
-        "gif" -> "image/gif"
-        "webp" -> "image/webp"
-        "mp4" -> "video/mp4"
-        "pdf" -> "application/pdf"
-        "txt" -> "text/plain"
-        else -> "application/octet-stream"
+        "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; "mp4" -> "video/mp4"; "pdf" -> "application/pdf"; "txt" -> "text/plain"; else -> "application/octet-stream"
     }
 
     private fun page(): String {
