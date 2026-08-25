@@ -8,7 +8,7 @@ class PhotoSyncApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        localServer = LocalServer(18000)
+        localServer = LocalServer(this, 18000)
         localServer.start()
     }
 
