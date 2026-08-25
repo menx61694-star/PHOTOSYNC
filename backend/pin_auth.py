@@ -138,24 +138,26 @@ def install(app):
         if request.headers.get(_APP_TRUST_HEADER):
             return await call_next(request)
 
-        # Browser pairing is allowed only when the current server PIN is sent
-        # in a dedicated header. On success we create the same short-lived
-        # session used by the normal /api/pair endpoint, then let the actual
-        # /web-client/pair route run normally.
+        # Browser pairing: validate the PIN first, then execute the actual
+        # pairing route. Only issue the session cookie when that route succeeds.
         if path == "/web-client/pair":
             pair_pin = request.headers.get(_PAIR_PIN_HEADER, "")
             if pair_pin:
                 token = _check_pin(pair_pin, request)
                 response = await call_next(request)
-                response.set_cookie(
-                    key="photosync_session",
-                    value=token,
-                    max_age=SESSION_TTL_SECONDS,
-                    httponly=True,
-                    samesite="strict",
-                    secure=False,
-                    path="/",
-                )
+                if response.status_code < 400:
+                    response.set_cookie(
+                        key="photosync_session",
+                        value=token,
+                        max_age=SESSION_TTL_SECONDS,
+                        httponly=True,
+                        samesite="strict",
+                        secure=False,
+                        path="/",
+                    )
+                else:
+                    with _lock:
+                        _sessions.pop(token, None)
                 return response
 
         token = _request_session(request)
