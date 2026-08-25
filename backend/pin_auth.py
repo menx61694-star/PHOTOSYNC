@@ -8,10 +8,9 @@ from urllib.request import Request as UrlRequest, urlopen
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
-# The Android app owns the pairing PIN. The external PC server must never
-# generate or persist its own PIN. For browser pairing, the PC server forwards
-# the entered PIN to the selected phone's embedded Android server and accepts
-# the pairing only when that phone validates it.
+# The Android app owns the pairing PIN. The external PC server never generates
+# or persists a server-wide PIN. For browser pairing, the PC server forwards
+# the entered PIN to the selected phone's embedded Android server.
 SESSION_TTL_SECONDS = 30 * 60
 MAX_ATTEMPTS_PER_MINUTE = 5
 _LOCAL_SERVER_PORT = 18000
@@ -70,7 +69,7 @@ def _verify_phone_pin(phone_ip: str, pin: str):
         return False
 
     # The PIN is checked by the Android app itself. The PC server only relays
-    # the challenge; it does not know, generate, or store the PIN.
+    # the challenge and does not store the PIN.
     query = urlencode({"pin": pin})
     url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}/api/pair?{query}"
     try:
@@ -78,9 +77,8 @@ def _verify_phone_pin(phone_ip: str, pin: str):
         with urlopen(req, timeout=2.5) as response:
             return 200 <= response.status < 300
     except Exception:
-        # Android LocalServer currently exposes /api/pair as a POST endpoint;
-        # if an older build only accepts GET, retry without changing ownership
-        # of the PIN. This keeps compatibility with older app builds.
+        # Compatibility with older Android local-server builds that accepted
+        # the pairing request through GET.
         try:
             with urlopen(url, timeout=2.5) as response:
                 return 200 <= response.status < 300
@@ -88,7 +86,7 @@ def _verify_phone_pin(phone_ip: str, pin: str):
             return False
 
 
-def pair_with_phone(pin: str, phone_ip: str, device_id: str, request: Request):
+def _create_session(pin: str, phone_ip: str, device_id: str, request: Request):
     now = time.time()
     ip = _client_ip(request)
     key = f"{ip}|{device_id}"
@@ -107,17 +105,11 @@ def pair_with_phone(pin: str, phone_ip: str, device_id: str, request: Request):
     with _lock:
         _attempts[key].clear()
         token = secrets.token_urlsafe(32)
-        _sessions[token] = {
-            "expires": now + SESSION_TTL_SECONDS,
-            "device_id": device_id,
-        }
+        _sessions[token] = {"expires": now + SESSION_TTL_SECONDS, "device_id": device_id}
+    return token
 
-    response = JSONResponse({
-        "paired": True,
-        "session_token": token,
-        "device_id": device_id,
-        "expires_in_seconds": SESSION_TTL_SECONDS,
-    })
+
+def _set_session_cookie(response, token):
     response.set_cookie(
         key="photosync_session",
         value=token,
@@ -127,6 +119,17 @@ def pair_with_phone(pin: str, phone_ip: str, device_id: str, request: Request):
         secure=False,
         path="/",
     )
+
+
+def pair_with_phone(pin: str, phone_ip: str, device_id: str, request: Request):
+    token = _create_session(pin, phone_ip, device_id, request)
+    response = JSONResponse({
+        "paired": True,
+        "session_token": token,
+        "device_id": device_id,
+        "expires_in_seconds": SESSION_TTL_SECONDS,
+    })
+    _set_session_cookie(response, token)
     return response
 
 
@@ -173,8 +176,8 @@ def install(app):
             "message": "Enter the PIN shown for the selected phone in the PhotoSync app",
         }
 
-    # Kept for compatibility with older clients. The PC server does not own a
-    # PIN, so this endpoint cannot authenticate a browser by itself.
+    # Compatibility endpoint. It requires a selected phone IP because the PC
+    # server itself does not own a PIN.
     @app.post("/api/pair")
     def pair_endpoint(request: Request, pin: str, device_ip: str = "", device_id: str = ""):
         if not device_ip or not device_id:
@@ -200,15 +203,35 @@ def install(app):
     async def pin_gate(request: Request, call_next):
         path = request.url.path
 
-        # Public bootstrap endpoints expose no file contents. Browser pairing
-        # itself is handled by the /web-client/pair endpoint in main.py, which
-        # supplies the selected phone IP and calls pair_with_phone().
+        # Browser pairing is per-phone: the browser supplies the selected
+        # phone's IP/device id and the PIN displayed by that phone's app.
+        # The middleware validates the PIN against the phone, then lets the
+        # existing /web-client/pair endpoint persist the web-client pairing.
+        if path == "/web-client/pair":
+            pin = request.query_params.get("pin", "").strip()
+            phone_ip = request.query_params.get("device_ip", "").strip()
+            device_id = request.query_params.get("device_id", "").strip()
+            if request.method != "POST":
+                return JSONResponse({"detail": "Method not allowed"}, status_code=405)
+            if not pin or not phone_ip or not device_id:
+                return JSONResponse({"detail": "Phone PIN, device IP and device ID are required"}, status_code=400)
+            try:
+                token = _create_session(pin, phone_ip, device_id, request)
+            except HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            response = await call_next(request)
+            if response.status_code < 400:
+                _set_session_cookie(response, token)
+            else:
+                with _lock:
+                    _sessions.pop(token, None)
+            return response
+
+        # These bootstrap endpoints expose no file contents.
         if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        # Android app API calls use the existing device identity header. The
-        # browser can never use this bypass because it does not have the app's
-        # device identity.
+        # Android app API calls use the existing device identity header.
         if request.headers.get(_APP_TRUST_HEADER):
             return await call_next(request)
 
