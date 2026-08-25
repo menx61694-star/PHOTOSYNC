@@ -195,6 +195,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun connectSocket() {
         if (!started || currentServerUrl().isBlank()) return
+        if (isLocalServerUrl(currentServerUrl())) {
+            serverStatus.text = "● Local Server: Connected"
+            refreshLists()
+            return
+        }
         socket?.cancel()
         serverStatus.text = "● Server: Connecting…"
         socket = client.newWebSocket(requestBuilder(wsUrl()).build(), object : WebSocketListener() {
