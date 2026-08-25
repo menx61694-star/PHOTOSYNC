@@ -36,6 +36,10 @@ def valid_session(token):
         return expires is not None and expires > time.time()
 
 
+def _client_ip(request: Request):
+    return request.client.host if request.client else "unknown"
+
+
 def pair(pin: str, request: Request):
     now = time.time()
     ip = _client_ip(request)
@@ -74,10 +78,6 @@ def logout():
     return response
 
 
-def _client_ip(request: Request):
-    return request.client.host if request.client else "unknown"
-
-
 _PUBLIC_EXACT = {
     "/",
     "/health",
@@ -89,6 +89,15 @@ _PUBLIC_EXACT = {
 _PUBLIC_PREFIXES = ("/dashboard",)
 _APP_TRUST_HEADER = "X-PhotoSync-Device-ID"
 _SESSION_HEADER = "X-PhotoSync-Session"
+_SESSION_QUERY = "session"
+
+
+def _request_session(request: Request):
+    return (
+        request.cookies.get("photosync_session")
+        or request.headers.get(_SESSION_HEADER, "")
+        or request.query_params.get(_SESSION_QUERY, "")
+    )
 
 
 def install(app):
@@ -102,7 +111,7 @@ def install(app):
 
     @app.get("/api/session")
     def session_endpoint(request: Request):
-        token = request.cookies.get("photosync_session") or request.headers.get(_SESSION_HEADER, "")
+        token = _request_session(request)
         authorized = valid_session(token)
         return {"authorized": authorized, "expires_in_seconds": SESSION_TTL_SECONDS if authorized else 0}
 
@@ -119,8 +128,8 @@ def install(app):
         if request.headers.get(_APP_TRUST_HEADER):
             return await call_next(request)
         # Same-origin dashboard uses the secure HttpOnly cookie; an external
-        # standalone page uses the short-lived session header instead.
-        token = request.cookies.get("photosync_session") or request.headers.get(_SESSION_HEADER, "")
+        # standalone page uses the short-lived session header or query token.
+        token = _request_session(request)
         if valid_session(token):
             return await call_next(request)
         return JSONResponse({"detail": "PIN pairing required"}, status_code=401)
