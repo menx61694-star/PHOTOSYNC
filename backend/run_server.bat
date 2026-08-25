@@ -19,8 +19,24 @@ if "%FIRST_RUN%"=="1" (
     exit /b 1
   )
 )
+
+echo.
+echo Configuring PHOTOSYNC private-LAN firewall rules...
+net session >nul 2>&1
+if %errorlevel%==0 (
+  netsh advfirewall firewall delete rule name="PhotoSync TCP 8000" >nul 2>&1
+  netsh advfirewall firewall add rule name="PhotoSync TCP 8000" dir=in action=allow protocol=TCP localport=8000 profile=private >nul
+  netsh advfirewall firewall delete rule name="PhotoSync UDP 8001" >nul 2>&1
+  netsh advfirewall firewall add rule name="PhotoSync UDP 8001" dir=in action=allow protocol=UDP localport=8001 profile=private >nul
+  echo Private-LAN firewall rules ready.
+) else (
+  echo WARNING: Administrator permission is required to add Windows Firewall rules.
+  echo If phones cannot reach this PC, run this BAT file once as Administrator.
+)
+
 echo.
 echo PHOTOSYNC server starting on port 8000...
+echo LAN access requires the PC and phone to be on the same reachable network.
 echo Keep this window open while using the app.
 python -m uvicorn main:app --host 0.0.0.0 --port 8000
 pause
