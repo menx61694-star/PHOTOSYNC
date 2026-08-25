@@ -44,6 +44,7 @@ import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -58,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
     private val deviceIdentity by lazy { DeviceIdentity(this) }
     private val thumbnailCache by lazy { ThumbnailCache(cacheDir) }
+    private val localServer by lazy { (application as PhotoSyncApplication).localServer }
     private var socket: WebSocket? = null
     private var started = false
     private var discoveryInProgress = false
@@ -84,7 +86,16 @@ class MainActivity : AppCompatActivity() {
         sentFilesContainer = findViewById(R.id.sentFilesContainer)
         receivedFilesContainer = findViewById(R.id.receivedFilesContainer)
         mainScroll = findViewById(R.id.mainScroll)
-        serverUrlInput.setText(prefs.getString("server_url", ""))
+
+        val savedServer = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        if (savedServer.isBlank()) {
+            localServer.url()?.let { localUrl ->
+                serverUrlInput.setText(localUrl)
+                prefs.edit().putString("server_url", localUrl).apply()
+            }
+        } else {
+            serverUrlInput.setText(savedServer)
+        }
         applyThemeColor()
 
         findViewById<Button>(R.id.saveServerButton).setOnClickListener {
@@ -105,7 +116,7 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         started = true
         applyThemeColor()
-        discoverServer()
+        connectSavedOrLocalServer()
         handler.removeCallbacks(receiveRefreshRunnable)
         handler.postDelayed(receiveRefreshRunnable, 3000)
     }
@@ -122,6 +133,27 @@ class MainActivity : AppCompatActivity() {
     private fun currentServerUrl(): String =
         prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))
             ?.trim()?.removeSuffix("/") ?: ""
+
+    private fun isLocalServerUrl(url: String): Boolean =
+        localServer.url()?.removeSuffix("/") == url.removeSuffix("/")
+
+    private fun connectSavedOrLocalServer() {
+        val saved = currentServerUrl()
+        if (saved.isNotBlank()) {
+            reconnectSocket()
+            refreshLists()
+            status.text = if (isLocalServerUrl(saved)) "Android local server ready ✓" else "Using saved server"
+            return
+        }
+        val localUrl = localServer.url()
+        if (!localUrl.isNullOrBlank() && localServer.isRunning()) {
+            saveAndConnect(localUrl)
+            status.text = "Android local server connected ✓"
+        } else {
+            serverStatus.text = "● Local server: Not running"
+            status.text = "Local server is not available — tap Find Server"
+        }
+    }
 
     private fun applyThemeColor() {
         val raw = prefs.getString("theme_color", "#BDA4FF") ?: "#BDA4FF"
@@ -369,12 +401,23 @@ class MainActivity : AppCompatActivity() {
                         if (bar != null) bar.progress = percent
                     }
                 }
-                val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("file", originalName, progressBody)
-                    .addFormDataPart("source", "app")
-                    .addFormDataPart("device_id", deviceIdentity.id)
-                    .build()
-                val request = requestBuilder("$serverUrl/upload").post(multipart).build()
+
+                val request = if (isLocalServerUrl(serverUrl)) {
+                    // The embedded Android server intentionally accepts a raw file body.
+                    // Keep the external Python server's multipart contract unchanged.
+                    val encodedName = URLEncoder.encode(originalName, "UTF-8")
+                    requestBuilder("$serverUrl/upload?source=app&filename=$encodedName")
+                        .post(progressBody)
+                        .build()
+                } else {
+                    val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
+                        .addFormDataPart("file", originalName, progressBody)
+                        .addFormDataPart("source", "app")
+                        .addFormDataPart("device_id", deviceIdentity.id)
+                        .build()
+                    requestBuilder("$serverUrl/upload").post(multipart).build()
+                }
+
                 runOnUiThread { status.text = "Sending $originalName…" }
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
