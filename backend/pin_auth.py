@@ -134,12 +134,9 @@ def install(app):
         if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        # Android app API calls use the existing device identity header.
-        if request.headers.get(_APP_TRUST_HEADER):
-            return await call_next(request)
-
-        # Browser pairing: validate the PIN first, then execute the actual
-        # pairing route. Only issue the session cookie when that route succeeds.
+        # Browser pairing MUST be handled before the Android trust-header
+        # bypass. Otherwise a request carrying the device header could bypass
+        # the browser PIN entirely.
         if path == "/web-client/pair":
             pair_pin = request.headers.get(_PAIR_PIN_HEADER, "")
             if pair_pin:
@@ -159,6 +156,11 @@ def install(app):
                     with _lock:
                         _sessions.pop(token, None)
                 return response
+            return JSONResponse({"detail": "Pairing PIN required"}, status_code=401)
+
+        # Android app API calls use the existing device identity header.
+        if request.headers.get(_APP_TRUST_HEADER):
+            return await call_next(request)
 
         token = _request_session(request)
         if valid_session(token):
