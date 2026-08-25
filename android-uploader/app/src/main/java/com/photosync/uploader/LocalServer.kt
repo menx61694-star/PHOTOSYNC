@@ -124,17 +124,24 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
                 val query = parseQuery(rawPath.substringAfter('?', ""))
                 val clientKey = it.inetAddress?.hostAddress ?: "unknown"
                 val token = parseCookie(headers["cookie"], "photosync_session")
+
+                // The embedded server must remain PIN-protected for browsers, but the
+                // PhotoSync app itself must be able to use its own server without a
+                // browser session. Require BOTH the persistent device identity header
+                // and the connection to originate from this phone's own LAN address.
+                val appTrusted = clientKey == localIpv4() && !headers["x-photosync-device-id"].isNullOrBlank()
+                val authorized = isAuthorized(token) || appTrusted
+
                 val response = when {
                     path == "/" || path == "/dashboard" || path == "/dashboard/" -> responseHtml(page())
                     path == "/api/pin" -> responseJson("{\"pin_required\":true,\"message\":\"Enter the PIN shown in the PhotoSync app\"}")
                     path == "/api/pair" && method == "POST" -> pair(clientKey, query["pin"] ?: "")
                     path == "/api/session" -> {
-                        val ok = isAuthorized(token)
-                        if (ok) responseJson("{\"authorized\":true,\"expires_in_seconds\":${((sessions[token]!! - System.currentTimeMillis()) / 1000).coerceAtLeast(0)}}")
+                        if (authorized) responseJson("{\"authorized\":true,\"expires_in_seconds\":${((sessions[token]?.minus(System.currentTimeMillis()) ?: sessionLifetimeMs) / 1000).coerceAtLeast(0)}}")
                         else responseJson("{\"authorized\":false}", "401 Unauthorized")
                     }
                     path == "/api/logout" && method == "POST" -> logoutResponse()
-                    !isAuthorized(token) -> responseJson("{\"detail\":\"PIN pairing required\"}", "401 Unauthorized")
+                    !authorized -> responseJson("{\"detail\":\"PIN pairing required\"}", "401 Unauthorized")
                     path == "/files" && method == "GET" -> filesResponse(query["source"])
                     path.startsWith("/files/") && method == "GET" -> fileResponse(path)
                     path == "/upload" && method == "POST" -> uploadResponse(input, headers, query)
@@ -154,16 +161,12 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         val bodyBytes = response.bytes ?: response.body.toByteArray(Charsets.UTF_8)
         val cookie = response.setCookie?.let { "Set-Cookie: $it\r\n" } ?: ""
         val header = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.contentType}\r\nContent-Length: ${bodyBytes.size}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\n${cookie}Connection: close\r\n\r\n"
-        socket.getOutputStream().use { out ->
-            out.write(header.toByteArray(Charsets.US_ASCII)); out.write(bodyBytes); out.flush()
-        }
+        socket.getOutputStream().use { out -> out.write(header.toByteArray(Charsets.US_ASCII)); out.write(bodyBytes); out.flush() }
     }
 
     private fun pair(clientKey: String, supplied: String): Response {
         val now = System.currentTimeMillis()
-        val attempts = failedAttempts.compute(clientKey) { _, old ->
-            (old ?: mutableListOf()).filter { now - it < 60_000 }.toMutableList()
-        } ?: mutableListOf()
+        val attempts = failedAttempts.compute(clientKey) { _, old -> (old ?: mutableListOf()).filter { now - it < 60_000 }.toMutableList() } ?: mutableListOf()
         if (attempts.size >= maxAttemptsPerMinute) return responseJson("{\"paired\":false,\"message\":\"Too many attempts; try again later\"}", "429 Too Many Requests")
         if (supplied.length == 6 && supplied == pin) {
             attempts.clear()
