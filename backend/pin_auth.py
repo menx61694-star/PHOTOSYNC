@@ -122,6 +122,15 @@ def _set_session_cookie(response, token):
     )
 
 
+def _set_session_header(response, token):
+    # Standalone.html can be opened from a different origin (including file://).
+    # Such a page cannot rely on same-origin cookies, so expose the short-lived
+    # bearer token explicitly. The token is still never persisted by the PC
+    # server on disk and expires after SESSION_TTL_SECONDS.
+    response.headers["X-PhotoSync-Session"] = token
+    response.headers["Access-Control-Expose-Headers"] = "X-PhotoSync-Session"
+
+
 def pair_with_phone(pin: str, phone_ip: str, device_id: str, request: Request):
     token = _create_session(pin, phone_ip, device_id, request)
     response = JSONResponse({
@@ -131,6 +140,7 @@ def pair_with_phone(pin: str, phone_ip: str, device_id: str, request: Request):
         "expires_in_seconds": SESSION_TTL_SECONDS,
     })
     _set_session_cookie(response, token)
+    _set_session_header(response, token)
     return response
 
 
@@ -245,6 +255,7 @@ def install(app):
             response = await call_next(request)
             if response.status_code < 400:
                 _set_session_cookie(response, token)
+                _set_session_header(response, token)
             else:
                 with _lock:
                     _sessions.pop(token, None)
