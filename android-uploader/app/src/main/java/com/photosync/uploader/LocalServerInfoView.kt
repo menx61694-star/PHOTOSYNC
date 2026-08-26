@@ -5,6 +5,8 @@ import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
+import android.view.Gravity
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -16,6 +18,7 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val status = TextView(context)
     private val address = TextView(context)
     private val pin = TextView(context)
+    private val refreshPin = Button(context)
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -33,13 +36,29 @@ class LocalServerInfoView @JvmOverloads constructor(
         status.textSize = 16f
         address.setTextColor(Color.rgb(185, 199, 217))
         address.textSize = 14f
-        pin.setTextColor(Color.rgb(255, 255, 255))
+        pin.setTextColor(Color.WHITE)
         pin.textSize = 22f
         pin.setPadding(0, 8, 0, 0)
 
+        refreshPin.text = "Refresh PIN"
+        refreshPin.setOnClickListener {
+            val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
+            if (app.localServer.isRunning()) {
+                app.localServer.refreshPin()
+                updateInfo()
+            }
+        }
+
+        val row = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(pin, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            addView(refreshPin, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        }
+
         addView(status)
         addView(address)
-        addView(pin)
+        addView(row)
     }
 
     override fun onAttachedToWindow() {
@@ -60,10 +79,12 @@ class LocalServerInfoView @JvmOverloads constructor(
             status.text = "● Local Server: Starting / stopped"
             address.text = "Web address: unavailable"
             pin.text = "PIN: —"
+            refreshPin.isEnabled = false
             return
         }
         status.text = "● Local Server: Running"
         address.text = "Web: ${server.url() ?: "Waiting for network…"}"
         pin.text = "Pairing PIN: ${server.currentPin()}"
+        refreshPin.isEnabled = true
     }
 }
