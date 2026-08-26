@@ -147,7 +147,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     private fun write(socket: Socket, response: Response) {
         val body = response.bytes ?: response.body.toByteArray(Charsets.UTF_8)
         val cookie = response.cookie?.let { "Set-Cookie: $it\r\n" } ?: ""
-        val headers = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.type}\r\nContent-Length: ${body.size}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\n${response.extra}$cookieConnection: close\r\n\r\n"
+        val headers = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.type}\r\nContent-Length: ${body.size}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\n${response.extra}$cookie\r\nConnection: close\r\n\r\n"
         socket.getOutputStream().use { out -> out.write(headers.toByteArray(Charsets.US_ASCII)); out.write(body); out.flush() }
     }
 
