@@ -61,19 +61,21 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     fun currentPin() = pin
     fun isAuthorized(token: String?) = token != null && sessions[token]?.let { System.currentTimeMillis() < it } == true
 
-    fun localIpv4(): String? = try {
-        val ns = NetworkInterface.getNetworkInterfaces()
-        while (ns.hasMoreElements()) {
-            val n = ns.nextElement()
-            if (!n.isUp || n.isLoopback || n.isVirtual) continue
-            val as_ = n.inetAddresses
-            while (as_.hasMoreElements()) {
-                val a = as_.nextElement()
-                if (a is Inet4Address && !a.isLoopbackAddress) return a.hostAddress
+    fun localIpv4(): String? {
+        return try {
+            val ns = NetworkInterface.getNetworkInterfaces()
+            while (ns.hasMoreElements()) {
+                val n = ns.nextElement()
+                if (!n.isUp || n.isLoopback || n.isVirtual) continue
+                val as_ = n.inetAddresses
+                while (as_.hasMoreElements()) {
+                    val a = as_.nextElement()
+                    if (a is Inet4Address && !a.isLoopbackAddress) return a.hostAddress
+                }
             }
-        }
-        null
-    } catch (_: Exception) { null }
+            null
+        } catch (_: Exception) { null }
+    }
 
     fun url() = localIpv4()?.let { "http://$it:$port" }
     private fun generatePin() = (100000 + random.nextInt(900000)).toString()
