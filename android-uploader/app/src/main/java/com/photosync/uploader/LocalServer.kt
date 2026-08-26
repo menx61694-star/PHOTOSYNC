@@ -58,6 +58,14 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         serverSocket = null
     }
 
+    /** Generate a new app-owned pairing PIN without restarting the server. */
+    fun refreshPin(): String {
+        pin = generatePin()
+        sessions.clear()
+        failedAttempts.clear()
+        return pin
+    }
+
     fun isRunning(): Boolean = running && serverSocket?.isClosed == false
     fun currentPin(): String = pin
     fun isAuthorized(token: String?): Boolean = token != null && sessions[token]?.let { System.currentTimeMillis() < it } == true
@@ -124,11 +132,6 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
                 val query = parseQuery(rawPath.substringAfter('?', ""))
                 val clientKey = it.inetAddress?.hostAddress ?: "unknown"
                 val token = parseCookie(headers["cookie"], "photosync_session")
-
-                // The embedded server must remain PIN-protected for browsers, but the
-                // PhotoSync app itself must be able to use its own server without a
-                // browser session. Require BOTH the persistent device identity header
-                // and the connection to originate from this phone's own LAN address.
                 val appTrusted = clientKey == localIpv4() && !headers["x-photosync-device-id"].isNullOrBlank()
                 val authorized = isAuthorized(token) || appTrusted
 
@@ -145,7 +148,7 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
                     path == "/files" && method == "GET" -> filesResponse(query["source"])
                     path.startsWith("/files/") && method == "GET" -> fileResponse(path)
                     path == "/upload" && method == "POST" -> uploadResponse(input, headers, query)
-                    path == "/api/info" -> responseJson("{\"server\":\"photosync-android\",\"ip\":${json(localIpv4())},\"port\":$port,\"pin_required\":true}")
+                    path == "/api/info" -> infoResponse()
                     else -> Response("404 Not Found", "text/plain; charset=utf-8", "Not found")
                 }
                 writeResponse(it, response)
@@ -153,14 +156,14 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         }
     }
 
-    private data class Response(val status: String, val contentType: String, val body: String = "", val bytes: ByteArray? = null, val setCookie: String? = null)
+    private data class Response(val status: String, val contentType: String, val body: String = "", val bytes: ByteArray? = null, val setCookie: String? = null, val extraHeaders: String = "")
     private fun responseJson(body: String, status: String = "200 OK") = Response(status, "application/json; charset=utf-8", body)
     private fun responseHtml(body: String) = Response("200 OK", "text/html; charset=utf-8", body)
 
     private fun writeResponse(socket: Socket, response: Response) {
         val bodyBytes = response.bytes ?: response.body.toByteArray(Charsets.UTF_8)
         val cookie = response.setCookie?.let { "Set-Cookie: $it\r\n" } ?: ""
-        val header = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.contentType}\r\nContent-Length: ${bodyBytes.size}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\n${cookie}Connection: close\r\n\r\n"
+        val header = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.contentType}\r\nContent-Length: ${bodyBytes.size}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\n${response.extraHeaders}$cookieConnection: close\r\n\r\n"
         socket.getOutputStream().use { out -> out.write(header.toByteArray(Charsets.US_ASCII)); out.write(bodyBytes); out.flush() }
     }
 
@@ -189,11 +192,18 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
 
     private fun fileJson(file: File, source: String): JSONObject {
         val name = file.name.substringAfter("__", file.name)
-        val type = if (name.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")) "image" else "file"
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val type = when {
+            ext in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp") -> "image"
+            ext in setOf("mp4", "mkv", "webm", "mov", "avi") -> "video"
+            ext == "pdf" -> "pdf"
+            ext in setOf("txt", "json", "xml", "csv", "log") -> "text"
+            else -> "file"
+        }
         return JSONObject().apply {
             put("filename", name); put("stored_filename", file.name)
             put("url", "/files/$source/${URLEncoder.encode(file.name, "UTF-8").replace("+", "%20")}")
-            put("size", file.length()); put("type", type); put("source", source)
+            put("size", file.length()); put("type", type); put("source", source); put("modified", file.lastModified())
         }
     }
 
@@ -213,7 +223,7 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         val dir = if (source == "app") uploadsDir else downloadsDir
         val file = dir.listFiles()?.firstOrNull { it.name == name }
         if (file == null || !file.isFile) return Response("404 Not Found", "text/plain", "Not found")
-        return Response("200 OK", contentType(name), bytes = file.readBytes())
+        return Response("200 OK", contentType(name), bytes = file.readBytes(), extraHeaders = "Content-Disposition: inline; filename=\"${name.replace("\"", "_")}\"\r\n")
     }
 
     private fun uploadResponse(input: InputStream, headers: Map<String, String>, query: Map<String, String>): Response {
@@ -222,10 +232,19 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
         val length = headers["content-length"]?.toLongOrNull() ?: return responseJson("{\"detail\":\"Content-Length required\"}", "411 Length Required")
         if (length <= 0L) return responseJson("{\"detail\":\"Empty file\"}", "400 Bad Request")
         if (length > 500L * 1024L * 1024L) return responseJson("{\"detail\":\"File too large\"}", "413 Payload Too Large")
-        val destination = File(if (source == "app") uploadsDir else downloadsDir, "${System.currentTimeMillis()}__$original")
+        val destination = uniqueDestination(if (source == "app") uploadsDir else downloadsDir, original)
         destination.parentFile?.mkdirs()
         input.copyExactlyTo(destination.outputStream(), length)
         return responseJson(fileJson(destination, source).toString())
+    }
+
+    private fun uniqueDestination(dir: File, original: String): File {
+        var candidate = File(dir, "${System.currentTimeMillis()}__$original")
+        var n = 1
+        while (candidate.exists()) {
+            candidate = File(dir, "${System.currentTimeMillis()}__${n++}__$original")
+        }
+        return candidate
     }
 
     private fun InputStream.copyExactlyTo(output: java.io.OutputStream, expected: Long) {
@@ -242,12 +261,42 @@ class LocalServer(private val context: Context, private val port: Int = 18000) {
     }
 
     private fun contentType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; "mp4" -> "video/mp4"; "pdf" -> "application/pdf"; "txt" -> "text/plain"; else -> "application/octet-stream"
+        "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; "bmp" -> "image/bmp"
+        "mp4" -> "video/mp4"; "webm" -> "video/webm"; "mov" -> "video/quicktime"; "mkv" -> "video/x-matroska"
+        "pdf" -> "application/pdf"; "txt" -> "text/plain; charset=utf-8"; "json" -> "application/json"; "csv" -> "text/csv"; else -> "application/octet-stream"
+    }
+
+    private fun infoResponse(): Response {
+        val files = (uploadsDir.listFiles()?.filter { it.isFile } ?: emptyList()) + (downloadsDir.listFiles()?.filter { it.isFile } ?: emptyList())
+        val used = files.sumOf { it.length() }
+        val total = rootDir.usableSpace + rootDir.totalSpace
+        return responseJson("{\"server\":\"photosync-android\",\"ip\":${json(localIpv4())},\"port\":$port,\"pin_required\":true,\"running\":${isRunning()},\"used_bytes\":$used,\"free_bytes\":${rootDir.usableSpace},\"total_bytes\":$total}")
     }
 
     private fun page(): String {
         val address = url() ?: "Waiting for a local network address"
-        return """<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>PHOTOSYNC</title><style>body{font-family:system-ui;background:#0b0f14;color:#f5f7fa;margin:0;padding:20px}main{max-width:850px;margin:auto}.box{background:#172235;border:1px solid #2b3950;border-radius:16px;padding:16px;margin-bottom:16px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}button{background:#bda4ff;border:0;border-radius:10px;padding:12px 18px;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}input{background:#101824;color:white;border:1px solid #33415a;border-radius:10px;padding:12px}.pin{font-size:24px;letter-spacing:6px;text-align:center;width:220px}.files{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.card{background:#111923;border-radius:12px;overflow:hidden}.card img{width:100%;aspect-ratio:1;object-fit:cover}.meta{padding:9px;font-size:13px;word-break:break-word}.muted{color:#aab7ca}.hidden{display:none}.gate{max-width:430px;margin:12vh auto}</style></head><body><main><div id='gate' class='box gate'><h1>PHOTOSYNC</h1><p>Android local server is running.</p><p class='muted'>Web address: <code>$address</code></p><h2>Pair this browser</h2><p class='muted'>Enter the 6-digit PIN shown in the PhotoSync app.</p><div class='row'><input id='pin' class='pin' inputmode='numeric' autocomplete='one-time-code' maxlength='6' placeholder='PIN'><button id='pairButton' type='button'>Pair</button></div><p id='msg' class='muted'></p></div><div id='app' class='hidden'><div class='box'><div class='row' style='justify-content:space-between'><div><h1 style='margin:0'>PHOTOSYNC Local Server</h1><p class='muted'>Only this Android app's private server storage is shown.</p></div><button id='logoutButton' type='button'>Unpair</button></div></div><div class='box'><h2>Send files to this phone</h2><input id='picker' type='file' multiple><p class='muted'>Files are stored in the app's private Received folder.</p><div id='queue'></div></div><div class='box'><h2>Sent by app</h2><div id='sent' class='files'></div></div><div class='box'><h2>Received from web</h2><div id='received' class='files'></div></div></div></main><script>(()=>{const $=id=>document.getElementById(id);function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}async function pair(){const pin=$('pin').value.trim();const msg=$('msg');const button=$('pairButton');if(!/^\d{6}$/.test(pin)){msg.textContent='Enter a 6-digit PIN';return}button.disabled=true;msg.textContent='Pairing…';try{const r=await fetch('/api/pair?pin='+encodeURIComponent(pin),{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}});const text=await r.text();let data={};try{data=JSON.parse(text)}catch(_){data={message:text}}if(!r.ok||data.paired!==true){msg.textContent=data.message||('Pairing failed (HTTP '+r.status+')');button.disabled=false;return}msg.textContent='Paired ✓';show()}catch(e){msg.textContent='Pairing error: '+(e&&e.message?e.message:'Network error');button.disabled=false}}async function session(){try{const r=await fetch('/api/session?ts='+Date.now(),{credentials:'same-origin',cache:'no-store'});if(r.ok){const d=await r.json();if(d.authorized)show()}}catch(_){}}function show(){$('gate').classList.add('hidden');$('app').classList.remove('hidden');load()}async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'same-origin',cache:'no-store'})}finally{location.reload()}}$('pairButton').addEventListener('click',pair);$('pin').addEventListener('keydown',e=>{if(e.key==='Enter')pair()});$('logoutButton').addEventListener('click',logout);$('picker').addEventListener('change',()=>{[...$('picker').files].forEach(upload);$('picker').value='' });async function upload(file){const q=document.createElement('div');q.className='box';q.textContent='Uploading '+file.name+'…';$('queue').prepend(q);try{const r=await fetch('/upload?source=web&filename='+encodeURIComponent(file.name),{method:'POST',body:file,credentials:'same-origin'});if(!r.ok)throw new Error((await r.text())||'Upload failed');q.textContent='Uploaded ✓ '+file.name;load()}catch(e){q.textContent='Failed: '+e.message}}async function getFiles(source){const r=await fetch('/files?source='+encodeURIComponent(source)+'&ts='+Date.now(),{cache:'no-store',credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}async function load(){try{const [sent,received]=await Promise.all([getFiles('app'),getFiles('received')]);$('sent').innerHTML=cards(sent);$('received').innerHTML=cards(received)}catch(e){if(e.message.includes('401'))location.reload()}}function cards(a){if(!a.length)return '<div class=muted>None</div>';return a.map(p=>p.type==='image'?'<div class=card><img loading=lazy src="'+esc(p.url)+'"><div class=meta>'+esc(p.filename)+'</div></div>':'<div class=card><div style="aspect-ratio:1;display:grid;place-items:center;font-size:42px">📄</div><div class=meta>'+esc(p.filename)+'</div></div>').join('')}session();setInterval(()=>{if(!$('app').classList.contains('hidden'))load()},3000)})();</script></body></html>"""
+        return """<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>PHOTOSYNC</title><style>
+body{font-family:system-ui;background:#0b0f14;color:#f5f7fa;margin:0;padding:20px}main{max-width:950px;margin:auto}.box{background:#172235;border:1px solid #2b3950;border-radius:16px;padding:16px;margin-bottom:16px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}button{background:#bda4ff;border:0;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.55;cursor:wait}input{background:#101824;color:white;border:1px solid #33415a;border-radius:10px;padding:12px}.pin{font-size:24px;letter-spacing:6px;text-align:center;width:220px}.files{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:#111923;border-radius:12px;overflow:hidden}.thumb{width:100%;aspect-ratio:1;object-fit:cover;display:block;cursor:pointer}.videoThumb{width:100%;aspect-ratio:1;background:#05070a;object-fit:cover}.meta{padding:9px;font-size:13px;word-break:break-word}.muted{color:#aab7ca}.hidden{display:none}.gate{max-width:430px;margin:12vh auto}.danger{background:#44222a;color:#fff}.progress{height:8px;background:#283447;border-radius:8px;overflow:hidden;margin-top:8px}.progress i{display:block;height:100%;width:0;background:#bda4ff}.modal{position:fixed;inset:0;background:rgba(0,0,0,.9);display:flex;flex-direction:column;z-index:10}.modal .top{display:flex;gap:8px;padding:12px;justify-content:center}.viewer{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto}.viewer img{max-width:none;max-height:85vh;transform-origin:center}.viewer video{max-width:95vw;max-height:85vh}.modal a,.modal button{color:#fff;background:#27334a}.stat{display:flex;gap:16px;flex-wrap:wrap;color:#b9c6d8;font-size:13px}</style></head><body><main>
+<div id='gate' class='box gate'><h1>PHOTOSYNC</h1><p>Android local server is running.</p><p class='muted'>Web address: <code>$address</code></p><h2>Pair this browser</h2><p class='muted'>Enter the 6-digit PIN shown in the PhotoSync app.</p><div class='row'><input id='pin' class='pin' inputmode='numeric' autocomplete='one-time-code' maxlength='6' placeholder='PIN'><button id='pairButton' type='button'>Connect</button></div><p id='msg' class='muted'></p></div>
+<div id='app' class='hidden'><div class='box'><div class='row' style='justify-content:space-between'><div><h1 style='margin:0'>PHOTOSYNC Local Server</h1><p class='muted'>Private Android storage</p></div><button id='logoutButton' class='danger' type='button'>Disconnect</button></div><div id='stats' class='stat'>Loading storage…</div></div>
+<div class='box'><h2>Send files to this phone</h2><input id='picker' type='file' multiple><div id='queue'></div></div>
+<div class='box'><h2>Sent by app</h2><div id='sent' class='files'></div></div><div class='box'><h2>Received from web</h2><div id='received' class='files'></div></div></div></main>
+<div id='modal' class='modal hidden'><div class='top'><button id='zoomOut'>−</button><button id='zoomReset'>100%</button><button id='zoomIn'>+</button><a id='download' download>Download</a><button id='close'>Close</button></div><div id='viewer' class='viewer'></div></div>
+<script>(()=>{const $=id=>document.getElementById(id);function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}function fmt(n){n=Number(n)||0;const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]}
+async function pair(){const pin=$('pin').value.trim(),msg=$('msg'),button=$('pairButton');if(!/^\d{6}$/.test(pin)){msg.textContent='Enter a 6-digit PIN';return}button.disabled=true;msg.textContent='Connecting…';try{const r=await fetch('/api/pair?pin='+encodeURIComponent(pin),{method:'POST',credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});const d=await r.json().catch(()=>({}));if(!r.ok||d.paired!==true)throw Error(d.message||('Pairing failed (HTTP '+r.status+')'));msg.textContent='Connected ✓';show()}catch(e){msg.textContent='Connection failed: '+(e.message||'Network error')}finally{button.disabled=false}}
+async function session(){try{const r=await fetch('/api/session?ts='+Date.now(),{credentials:'same-origin',cache:'no-store'});if(r.ok){const d=await r.json();if(d.authorized)show()}}catch(_){} }function show(){$('gate').classList.add('hidden');$('app').classList.remove('hidden');load()}
+async function disconnect(){try{await fetch('/api/logout',{method:'POST',credentials:'same-origin',cache:'no-store'})}finally{location.reload()}}
+$('pairButton').onclick=pair;$('pin').onkeydown=e=>{if(e.key==='Enter')pair()};$('logoutButton').onclick=disconnect;
+$('picker').onchange=()=>{[...$('picker').files].forEach(upload);$('picker').value=''};
+function upload(file){const q=document.createElement('div');q.className='box';q.innerHTML='<b>'+esc(file.name)+'</b><div class=progress><i></i></div><div class=muted>0%</div><button class=danger>Cancel</button>';const bar=q.querySelector('i'),label=q.querySelector('.muted'),cancel=q.querySelector('button');$('queue').prepend(q);const xhr=new XMLHttpRequest();xhr.open('POST','/upload?source=web&filename='+encodeURIComponent(file.name));xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);bar.style.width=p+'%';label.textContent=p+'% • '+fmt(e.loaded)+' / '+fmt(e.total)}};xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300){label.textContent='Uploaded ✓';bar.style.width='100%';load()}else label.textContent='Failed: '+xhr.responseText};xhr.onerror=()=>label.textContent='Network error';xhr.onabort=()=>label.textContent='Cancelled';cancel.onclick=()=>xhr.abort();xhr.send(file)}
+async function getFiles(source){const r=await fetch('/files?source='+encodeURIComponent(source)+'&ts='+Date.now(),{cache:'no-store',credentials:'same-origin'});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
+function openViewer(p){$('modal').classList.remove('hidden');const v=$('viewer');v.innerHTML='';const url=p.url;let el;if(p.type==='image'){el=document.createElement('img');el.src=url;el.style.transform='scale(1)';el.dataset.scale='1'}else if(p.type==='video'){el=document.createElement('video');el.src=url;el.controls=true;el.autoplay=true}else{el=document.createElement('iframe');el.src=url;el.style='width:95vw;height:85vh;border:0;background:white'}v.appendChild(el);$('download').href=url;$('download').download=p.filename||'file';$('zoomIn').onclick=()=>{if(p.type==='image'){let s=Number(el.dataset.scale||1)+.25;el.dataset.scale=s;el.style.transform='scale('+s+')'}};$('zoomOut').onclick=()=>{if(p.type==='image'){let s=Math.max(.25,Number(el.dataset.scale||1)-.25);el.dataset.scale=s;el.style.transform='scale('+s+')'}};$('zoomReset').onclick=()=>{if(p.type==='image'){el.dataset.scale='1';el.style.transform='scale(1)'}}}
+$('close').onclick=()=>{$('modal').classList.add('hidden');$('viewer').innerHTML=''};
+function cards(a){if(!a.length)return '<div class=muted>None</div>';return a.map((p,i)=>{const u=esc(p.url),name=esc(p.filename||'file');let media='';if(p.type==='image')media='<img class=thumb loading=lazy src="'+u+'" data-i="'+i+'">';else if(p.type==='video')media='<video class=videoThumb muted preload=metadata src="'+u+'"></video>';else media='<div style="aspect-ratio:1;display:grid;place-items:center;font-size:42px">'+(p.type==='pdf'?'📕':'📄')+'</div>';return '<div class=card data-i="'+i+'">'+media+'<div class=meta>'+name+'<br><span class=muted>'+fmt(p.size)+'</span><br><button class=view data-i="'+i+'">View</button> <a class=downloadLink href="'+u+'" download="'+name+'">Download</a></div></div>'}).join('')}
+async function render(source,target){const a=await getFiles(source);target.dataset.items=JSON.stringify(a);target.innerHTML=cards(a);target.querySelectorAll('.view').forEach(b=>b.onclick=()=>openViewer(a[Number(b.dataset.i)]));target.querySelectorAll('.thumb,.videoThumb').forEach(e=>e.onclick=()=>openViewer(a[Number(e.closest('.card').dataset.i)]))}
+async function load(){try{await Promise.all([render('app',$('sent')),render('received',$('received')),loadInfo()])}catch(e){if(String(e.message).includes('401'))location.reload()}}
+async function loadInfo(){try{const r=await fetch('/api/info?ts='+Date.now(),{credentials:'same-origin',cache:'no-store'});if(!r.ok)return;const d=await r.json();$('stats').textContent='Storage: '+fmt(d.used_bytes)+' used • '+fmt(d.free_bytes)+' free • '+(d.ip||'network unavailable')}catch(_){} }
+session();setInterval(()=>{if(!$('app').classList.contains('hidden'))load()},5000)})();</script></body></html>"""
     }
 
     private fun json(value: String?): String = if (value == null) "null" else "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
