@@ -8,8 +8,9 @@ class PhotoSyncApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Only create the server here. Do not bind the ServerSocket during
-        // Application startup. MainActivity starts it after the UI exists.
+        // Only create the server here. Do NOT bind the ServerSocket during
+        // Application startup. Server startup is owned by the Activity so a
+        // server/network failure can never crash the app process at launch.
         localServer = LocalServer(this, 18000)
     }
 
