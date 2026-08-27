@@ -63,6 +63,13 @@ class LocalServerInfoView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        // The Application only owns the server instance; the Activity UI owns
+        // starting it. Start here after the view is attached so the server is
+        // actually bound before its status/PIN are displayed.
+        val app = context.applicationContext as? PhotoSyncApplication
+        if (app != null && !app.localServer.isRunning()) {
+            app.localServer.start()
+        }
         handler.removeCallbacks(refresh)
         handler.post(refresh)
     }
