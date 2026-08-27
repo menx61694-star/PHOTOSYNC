@@ -19,6 +19,7 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val address = TextView(context)
     private val pin = TextView(context)
     private val refreshPin = Button(context)
+    private val serverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -31,7 +32,6 @@ class LocalServerInfoView @JvmOverloads constructor(
         orientation = VERTICAL
         setPadding(18, 18, 18, 18)
         setBackgroundColor(Color.rgb(23, 34, 53))
-
         status.setTextColor(Color.WHITE)
         status.textSize = 16f
         address.setTextColor(Color.rgb(185, 199, 217))
@@ -39,23 +39,23 @@ class LocalServerInfoView @JvmOverloads constructor(
         pin.setTextColor(Color.WHITE)
         pin.textSize = 22f
         pin.setPadding(0, 8, 0, 0)
-
         refreshPin.text = "Refresh PIN"
         refreshPin.setOnClickListener {
             val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
-            if (app.localServer.isRunning()) {
-                app.localServer.refreshPin()
-                updateInfo()
+            serverExecutor.execute {
+                try {
+                    if (app.localServer.isRunning()) app.localServer.refreshPin()
+                } finally {
+                    handler.post { updateInfo() }
+                }
             }
         }
-
         val row = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(pin, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(refreshPin, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         }
-
         addView(status)
         addView(address)
         addView(row)
@@ -63,12 +63,21 @@ class LocalServerInfoView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        // The Application only owns the server instance; the Activity UI owns
-        // starting it. Start here after the view is attached so the server is
-        // actually bound before its status/PIN are displayed.
         val app = context.applicationContext as? PhotoSyncApplication
         if (app != null && !app.localServer.isRunning()) {
-            app.localServer.start()
+            status.text = "● Local Server: Starting…"
+            refreshPin.isEnabled = false
+            serverExecutor.execute {
+                val started = try { app.localServer.start() } catch (_: Throwable) { false }
+                handler.post {
+                    if (started) updateInfo() else {
+                        status.text = "● Local Server: Not running"
+                        address.text = "Web address: unavailable"
+                        pin.text = "PIN: —"
+                        refreshPin.isEnabled = false
+                    }
+                }
+            }
         }
         handler.removeCallbacks(refresh)
         handler.post(refresh)
@@ -76,6 +85,7 @@ class LocalServerInfoView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         handler.removeCallbacks(refresh)
+        serverExecutor.shutdownNow()
         super.onDetachedFromWindow()
     }
 
@@ -83,7 +93,7 @@ class LocalServerInfoView @JvmOverloads constructor(
         val app = context.applicationContext as? PhotoSyncApplication ?: return
         val server = app.localServer
         if (!server.isRunning()) {
-            status.text = "● Local Server: Starting / stopped"
+            status.text = "● Local Server: Not running"
             address.text = "Web address: unavailable"
             pin.text = "PIN: —"
             refreshPin.isEnabled = false
