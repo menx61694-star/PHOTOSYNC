@@ -20,9 +20,12 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val pin = TextView(context)
     private val refreshPin = Button(context)
     private val serverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    @Volatile private var attached = false
+    @Volatile private var startRequested = false
 
     private val refresh = object : Runnable {
         override fun run() {
+            if (!attached) return
             updateInfo()
             handler.postDelayed(this, 1000)
         }
@@ -42,11 +45,12 @@ class LocalServerInfoView @JvmOverloads constructor(
         refreshPin.text = "Refresh PIN"
         refreshPin.setOnClickListener {
             val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
+            if (!app.localServer.isRunning()) return@setOnClickListener
+            refreshPin.isEnabled = false
             serverExecutor.execute {
-                try {
-                    if (app.localServer.isRunning()) app.localServer.refreshPin()
-                } finally {
-                    handler.post { updateInfo() }
+                try { app.localServer.refreshPin() } catch (_: Throwable) { }
+                handler.post {
+                    if (attached) updateInfo()
                 }
             }
         }
@@ -63,13 +67,17 @@ class LocalServerInfoView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        attached = true
         val app = context.applicationContext as? PhotoSyncApplication
-        if (app != null && !app.localServer.isRunning()) {
+        if (app != null && !app.localServer.isRunning() && !startRequested) {
+            startRequested = true
             status.text = "● Local Server: Starting…"
             refreshPin.isEnabled = false
             serverExecutor.execute {
                 val started = try { app.localServer.start() } catch (_: Throwable) { false }
                 handler.post {
+                    startRequested = false
+                    if (!attached) return@post
                     if (started) updateInfo() else {
                         status.text = "● Local Server: Not running"
                         address.text = "Web address: unavailable"
@@ -84,12 +92,16 @@ class LocalServerInfoView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        attached = false
         handler.removeCallbacks(refresh)
-        serverExecutor.shutdownNow()
+        // Do not shut down the executor here. Android may detach and reattach
+        // a view during normal lifecycle/layout changes; a permanently shut
+        // down executor would throw RejectedExecutionException on reattach.
         super.onDetachedFromWindow()
     }
 
     private fun updateInfo() {
+        if (!attached) return
         val app = context.applicationContext as? PhotoSyncApplication ?: return
         val server = app.localServer
         if (!server.isRunning()) {
