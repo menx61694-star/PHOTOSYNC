@@ -19,9 +19,7 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val address = TextView(context)
     private val pin = TextView(context)
     private val refreshPin = Button(context)
-    private val serverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
-    @Volatile private var attached = false
-    @Volatile private var startRequested = false
+    private var attached = false
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -47,12 +45,10 @@ class LocalServerInfoView @JvmOverloads constructor(
             val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
             if (!app.localServer.isRunning()) return@setOnClickListener
             refreshPin.isEnabled = false
-            serverExecutor.execute {
-                try { app.localServer.refreshPin() } catch (_: Throwable) { }
-                handler.post {
-                    if (attached) updateInfo()
-                }
-            }
+            Thread {
+                runCatching { app.localServer.refreshPin() }
+                handler.post { if (attached) updateInfo() }
+            }.start()
         }
         val row = LinearLayout(context).apply {
             orientation = HORIZONTAL
@@ -68,25 +64,6 @@ class LocalServerInfoView @JvmOverloads constructor(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         attached = true
-        val app = context.applicationContext as? PhotoSyncApplication
-        if (app != null && !app.localServer.isRunning() && !startRequested) {
-            startRequested = true
-            status.text = "● Local Server: Starting…"
-            refreshPin.isEnabled = false
-            serverExecutor.execute {
-                val started = try { app.localServer.start() } catch (_: Throwable) { false }
-                handler.post {
-                    startRequested = false
-                    if (!attached) return@post
-                    if (started) updateInfo() else {
-                        status.text = "● Local Server: Not running"
-                        address.text = "Web address: unavailable"
-                        pin.text = "PIN: —"
-                        refreshPin.isEnabled = false
-                    }
-                }
-            }
-        }
         handler.removeCallbacks(refresh)
         handler.post(refresh)
     }
@@ -94,9 +71,6 @@ class LocalServerInfoView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         attached = false
         handler.removeCallbacks(refresh)
-        // Do not shut down the executor here. Android may detach and reattach
-        // a view during normal lifecycle/layout changes; a permanently shut
-        // down executor would throw RejectedExecutionException on reattach.
         super.onDetachedFromWindow()
     }
 
