@@ -8,10 +8,11 @@ class PhotoSyncApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Only create the server here. Do NOT bind the ServerSocket during
-        // Application startup. Server startup is owned by the Activity so a
-        // server/network failure can never crash the app process at launch.
         localServer = LocalServer(this, 18000)
+        // LocalServer safely converts startup failures into an unavailable
+        // server state, so the embedded server can start with the app without
+        // taking down the Android process.
+        localServer.start()
     }
 
     override fun onTerminate() {
