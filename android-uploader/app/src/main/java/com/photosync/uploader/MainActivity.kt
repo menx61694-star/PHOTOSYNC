@@ -1,6 +1,5 @@
 package com.photosync.uploader
 
-// Stable file transfer + LAN discovery + live receive/preview + transfer progress
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.res.ColorStateList
@@ -47,7 +46,7 @@ import java.net.NetworkInterface
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
     private val client = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
     private lateinit var status: TextView
     private lateinit var serverStatus: TextView
@@ -62,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     private val localServer by lazy { (application as PhotoSyncApplication).localServer }
     private var socket: WebSocket? = null
     private var started = false
+    private var connectionEnabled = true
     private var discoveryInProgress = false
     private val activeProgressRows = mutableMapOf<String, View>()
     private val activeReceiveTransfers = mutableMapOf<String, String>()
@@ -88,11 +88,9 @@ class MainActivity : AppCompatActivity() {
         mainScroll = findViewById(R.id.mainScroll)
 
         val savedServer = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
-        if (savedServer.isBlank()) {
-            localServer.url()?.let { localUrl ->
-                serverUrlInput.setText(localUrl)
-                prefs.edit().putString("server_url", localUrl).apply()
-            }
+        if (savedServer.isNotBlank() && isLocalServerUrl(savedServer)) {
+            prefs.edit().remove("server_url").apply()
+            serverUrlInput.setText("")
         } else {
             serverUrlInput.setText(savedServer)
         }
@@ -108,6 +106,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<Button>(R.id.selectButton).setOnClickListener { picker.launch("*/*") }
+        findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
         findViewById<LinearLayout>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
         findViewById<LinearLayout>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
     }
@@ -115,8 +114,9 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         started = true
+        connectionEnabled = true
         applyThemeColor()
-        connectSavedOrLocalServer()
+        connectSavedOrDiscover()
         handler.removeCallbacks(receiveRefreshRunnable)
         handler.postDelayed(receiveRefreshRunnable, 3000)
     }
@@ -130,6 +130,26 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun onConnectRequested() {
+        connectionEnabled = true
+        val url = serverUrlInput.text.toString().trim().removeSuffix("/")
+        if (url.isBlank()) {
+            discoverServer()
+            return
+        }
+        saveAndConnect(url)
+    }
+
+    override fun onDisconnectRequested() {
+        connectionEnabled = false
+        socket?.close(1000, "User disconnected")
+        socket = null
+        prefs.edit().remove("server_url").apply()
+        serverUrlInput.setText("")
+        serverStatus.text = "● Server: Disconnected"
+        status.text = "Disconnected"
+    }
+
     private fun currentServerUrl(): String =
         prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))
             ?.trim()?.removeSuffix("/") ?: ""
@@ -137,22 +157,20 @@ class MainActivity : AppCompatActivity() {
     private fun isLocalServerUrl(url: String): Boolean =
         localServer.url()?.removeSuffix("/") == url.removeSuffix("/")
 
-    private fun connectSavedOrLocalServer() {
+    private fun connectSavedOrDiscover() {
         val saved = currentServerUrl()
-        if (saved.isNotBlank()) {
+        if (saved.isNotBlank() && !isLocalServerUrl(saved)) {
             reconnectSocket()
             refreshLists()
-            status.text = if (isLocalServerUrl(saved)) "Android local server ready ✓" else "Using saved server"
+            status.text = "Using saved server"
             return
         }
-        val localUrl = localServer.url()
-        if (!localUrl.isNullOrBlank() && localServer.isRunning()) {
-            saveAndConnect(localUrl)
-            status.text = "Android local server connected ✓"
-        } else {
-            serverStatus.text = "● Local server: Not running"
-            status.text = "Local server is not available — tap Find Server"
+        if (saved.isNotBlank() && isLocalServerUrl(saved)) {
+            prefs.edit().remove("server_url").apply()
+            serverUrlInput.setText("")
         }
+        serverStatus.text = "● Server: Searching LAN…"
+        discoverServer()
     }
 
     private fun applyThemeColor() {
@@ -167,16 +185,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveAndConnect(url: String) {
-        prefs.edit().putString("server_url", url).apply()
-        serverUrlInput.setText(url)
-        status.text = "Server saved ✓"
+        val normalized = url.trim().removeSuffix("/")
+        if (normalized.isBlank()) return
+        connectionEnabled = true
+        prefs.edit().putString("server_url", normalized).apply()
+        serverUrlInput.setText(normalized)
+        if (isLocalServerUrl(normalized)) {
+            socket?.close(1000, "Local server selected")
+            socket = null
+            serverStatus.text = if (localServer.isRunning()) "● Local Server: Connected" else "● Local Server: Not running"
+            status.text = if (localServer.isRunning()) "Android local server ready ✓" else "Android local server is not running"
+            refreshLists()
+            return
+        }
+        status.text = "Connecting…"
         reconnectSocket()
         refreshLists()
     }
 
     private fun wsUrl(): String {
         val base = currentServerUrl()
-        val id = java.net.URLEncoder.encode(deviceIdentity.id, "UTF-8")
+        val id = URLEncoder.encode(deviceIdentity.id, "UTF-8")
         return when {
             base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws?device_id=$id"
             base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws?device_id=$id"
@@ -190,22 +219,20 @@ class MainActivity : AppCompatActivity() {
     private fun reconnectSocket() {
         socket?.close(1000, "Reconnect")
         socket = null
-        if (started && currentServerUrl().isNotBlank()) connectSocket()
+        if (started && connectionEnabled && currentServerUrl().isNotBlank() && !isLocalServerUrl(currentServerUrl())) connectSocket()
     }
 
     private fun connectSocket() {
-        if (!started || currentServerUrl().isBlank()) return
-        if (isLocalServerUrl(currentServerUrl())) {
-            serverStatus.text = "● Local Server: Connected"
-            refreshLists()
-            return
-        }
+        val base = currentServerUrl()
+        if (!started || !connectionEnabled || base.isBlank() || isLocalServerUrl(base)) return
         socket?.cancel()
         serverStatus.text = "● Server: Connecting…"
         socket = client.newWebSocket(requestBuilder(wsUrl()).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
                 runOnUiThread {
+                    if (!connectionEnabled) { webSocket.close(1000, "User disconnected"); return@runOnUiThread }
                     serverStatus.text = "● Server: Connected"
+                    status.text = "Connected ✓"
                     refreshLists()
                 }
             }
@@ -220,11 +247,9 @@ class MainActivity : AppCompatActivity() {
                             val filename = data.optString("filename", "Receiving file")
                             val percent = data.optInt("percent", 0).coerceIn(0, 100)
                             runOnUiThread {
-                                if (percent >= 100) {
-                                    activeReceiveTransfers[transferId] = filename
-                                    removeProgressRow(transferId)
-                                } else {
-                                    activeReceiveTransfers[transferId] = filename
+                                if (percent >= 100) removeProgressRow(transferId)
+                                activeReceiveTransfers[transferId] = filename
+                                if (percent < 100) {
                                     val row = ensureProgressRow(receivedFilesContainer, transferId, "Receiving $filename")
                                     row.second.progress = percent
                                 }
@@ -240,11 +265,8 @@ class MainActivity : AppCompatActivity() {
                                     activeReceiveTransfers.remove(transferId)
                                     removeProgressRow(transferId)
                                 }
-                                if (source == "app") {
-                                    addFile(data, sentFilesContainer, "No files sent from this app yet")
-                                } else {
-                                    addFile(data, receivedFilesContainer, "No files received from web yet")
-                                }
+                                if (source == "app") addFile(data, sentFilesContainer, "No files sent from this app yet")
+                                else addFile(data, receivedFilesContainer, "No files received from web yet")
                             }
                         }
                     }
@@ -252,20 +274,27 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                runOnUiThread { serverStatus.text = "● Server: Disconnected" }
+                runOnUiThread {
+                    if (socket === webSocket) socket = null
+                    serverStatus.text = "● Server: Disconnected"
+                }
                 scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
-                runOnUiThread { serverStatus.text = "● Server: Disconnected" }
+                runOnUiThread {
+                    if (socket === webSocket) socket = null
+                    serverStatus.text = "● Server: Disconnected"
+                    if (started && connectionEnabled) status.text = "Connection failed — retrying…"
+                }
                 scheduleReconnect()
             }
         })
     }
 
     private fun scheduleReconnect() {
-        if (!started) return
-        handler.postDelayed({ if (started) connectSocket() }, 2000)
+        if (!started || !connectionEnabled) return
+        handler.postDelayed({ if (started && connectionEnabled && currentServerUrl().isNotBlank()) connectSocket() }, 2000)
     }
 
     private fun localBroadcastAddresses(): List<InetAddress> {
@@ -287,7 +316,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun discoverServer() {
-        if (!started || discoveryInProgress) return
+        if (!started || !connectionEnabled || discoveryInProgress) return
         discoveryInProgress = true
         serverStatus.text = "● Server: Searching LAN…"
         Thread {
@@ -317,17 +346,13 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) { }
             runOnUiThread {
                 discoveryInProgress = false
-                if (!started) return@runOnUiThread
+                if (!started || !connectionEnabled) return@runOnUiThread
                 if (foundUrl != null) {
                     saveAndConnect(foundUrl!!)
                     status.text = "Server found automatically ✓"
-                } else if (currentServerUrl().isNotBlank()) {
-                    status.text = "LAN server not found; trying saved server…"
-                    connectSocket()
-                    refreshLists()
                 } else {
                     serverStatus.text = "● Server: Not found"
-                    status.text = "No server found — tap Find Server"
+                    status.text = "No external PC server found — enter URL or tap Find Server"
                 }
             }
         }.start()
@@ -361,18 +386,12 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             setBackgroundColor(0xFF172235.toInt())
         }
-        val text = TextView(this).apply {
-            this.text = label
-            textSize = 13f
-        }
+        val text = TextView(this).apply { this.text = label; textSize = 13f }
         val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            tag = "progress_bar"
-            max = 100
-            progress = 0
+            tag = "progress_bar"; max = 100; progress = 0
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(6) }
         }
-        row.addView(text)
-        row.addView(bar)
+        row.addView(text); row.addView(bar)
         activeProgressRows[key] = row
         container.addView(row, 0)
         return row to bar
@@ -385,8 +404,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun upload(uri: Uri) {
         val serverUrl = currentServerUrl()
-        if (serverUrl.isBlank()) {
-            runOnUiThread { status.text = "Find a server first" }
+        if (serverUrl.isBlank() || isLocalServerUrl(serverUrl)) {
+            runOnUiThread { status.text = "Connect to the external PC server first" }
             return
         }
         val originalName = displayName(uri)
@@ -401,45 +420,22 @@ class MainActivity : AppCompatActivity() {
                 val progressBody = ProgressFileRequestBody(temp, mime.toMediaType()) { sent, total ->
                     val percent = if (total > 0L) ((sent * 100L) / total).toInt().coerceIn(0, 100) else 0
                     handler.post {
-                        val row = activeProgressRows[progressKey]
-                        val bar = row?.findViewWithTag<ProgressBar>("progress_bar")
+                        val bar = activeProgressRows[progressKey]?.findViewWithTag<ProgressBar>("progress_bar")
                         if (bar != null) bar.progress = percent
                     }
                 }
-
-                val request = if (isLocalServerUrl(serverUrl)) {
-                    // The embedded Android server intentionally accepts a raw file body.
-                    // Keep the external Python server's multipart contract unchanged.
-                    val encodedName = URLEncoder.encode(originalName, "UTF-8")
-                    requestBuilder("$serverUrl/upload?source=app&filename=$encodedName")
-                        .post(progressBody)
-                        .build()
-                } else {
-                    val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
-                        .addFormDataPart("file", originalName, progressBody)
-                        .addFormDataPart("source", "app")
-                        .addFormDataPart("device_id", deviceIdentity.id)
-                        .build()
-                    requestBuilder("$serverUrl/upload").post(multipart).build()
-                }
-
-                runOnUiThread { status.text = "Sending $originalName…" }
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) error("HTTP ${response.code}")
-                }
-                runOnUiThread {
-                    removeProgressRow(progressKey)
-                    status.text = "Sent ✓ $originalName"
-                }
+                val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
+                    .addFormDataPart("file", originalName, progressBody)
+                    .addFormDataPart("source", "app")
+                    .addFormDataPart("device_id", deviceIdentity.id)
+                    .build()
+                val request = requestBuilder("$serverUrl/upload").post(multipart).build()
+                client.newCall(request).execute().use { response -> if (!response.isSuccessful) error("HTTP ${response.code}") }
+                runOnUiThread { removeProgressRow(progressKey); status.text = "Sent ✓ $originalName" }
                 refreshLists()
             } catch (e: Exception) {
-                runOnUiThread {
-                    removeProgressRow(progressKey)
-                    status.text = "Send failed: ${e.message}"
-                }
-            } finally {
-                temp?.delete()
-            }
+                runOnUiThread { removeProgressRow(progressKey); status.text = "Send failed: ${e.message}" }
+            } finally { temp?.delete() }
         }.start()
     }
 
@@ -470,33 +466,20 @@ class MainActivity : AppCompatActivity() {
     private fun reconcileReceiveProgress(files: JSONArray) {
         if (activeReceiveTransfers.isEmpty()) return
         val completedNames = HashSet<String>()
-        for (i in 0 until files.length()) {
-            val item = files.optJSONObject(i) ?: continue
-            val name = item.optString("filename", "")
-            if (name.isNotBlank()) completedNames.add(name)
-        }
-        val completedTransfers = activeReceiveTransfers.filterValues { completedNames.contains(it) }.keys.toList()
-        for (transferId in completedTransfers) {
-            activeReceiveTransfers.remove(transferId)
-            removeProgressRow(transferId)
-        }
+        for (i in 0 until files.length()) files.optJSONObject(i)?.optString("filename", "")?.takeIf { it.isNotBlank() }?.let(completedNames::add)
+        val completed = activeReceiveTransfers.filterValues { completedNames.contains(it) }.keys.toList()
+        for (id in completed) { activeReceiveTransfers.remove(id); removeProgressRow(id) }
     }
 
     private fun addFile(item: JSONObject, container: LinearLayout, emptyText: String) {
         val stored = item.optString("stored_filename", "")
-        if (stored.isBlank()) return
-        if (findRow(container, stored) != null) return
+        if (stored.isBlank() || findRow(container, stored) != null) return
         removeEmptyMessage(container, emptyText)
-        val row = createFileRow(item)
-        row.tag = stored
-        container.addView(row, 0)
+        container.addView(createFileRow(item).apply { tag = stored }, 0)
     }
 
     private fun findRow(container: LinearLayout, stored: String): View? {
-        for (i in 0 until container.childCount) {
-            val child = container.getChildAt(i)
-            if (child.tag == stored) return child
-        }
+        for (i in 0 until container.childCount) if (container.getChildAt(i).tag == stored) return container.getChildAt(i)
         return null
     }
 
@@ -509,40 +492,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderFiles(files: JSONArray, container: LinearLayout, emptyText: String) {
         val incoming = LinkedHashMap<String, JSONObject>()
-        for (i in 0 until files.length()) {
-            val item = files.optJSONObject(i) ?: continue
-            val stored = item.optString("stored_filename", "")
-            if (stored.isNotBlank()) incoming[stored] = item
-        }
-
+        for (i in 0 until files.length()) files.optJSONObject(i)?.let { item -> item.optString("stored_filename", "").takeIf { it.isNotBlank() }?.let { incoming[it] = item } }
         val existingRows = mutableMapOf<String, View>()
         for (i in container.childCount - 1 downTo 0) {
-            val child = container.getChildAt(i)
-            val stored = child.tag as? String
-            if (stored != null && stored != "__empty__") {
-                existingRows[stored] = child
-                if (!incoming.containsKey(stored)) container.removeViewAt(i)
-            }
+            val child = container.getChildAt(i); val stored = child.tag as? String
+            if (stored != null && stored != "__empty__") { existingRows[stored] = child; if (!incoming.containsKey(stored)) container.removeViewAt(i) }
         }
-
         if (incoming.isEmpty()) {
-            if (existingRows.isEmpty() && container.childCount == 0) {
-                container.addView(TextView(this).apply {
-                    text = emptyText
-                    tag = "__empty__"
-                    setPadding(0, dp(8), 0, dp(8))
-                })
-            }
+            if (existingRows.isEmpty() && container.childCount == 0) container.addView(TextView(this).apply { text = emptyText; tag = "__empty__"; setPadding(0, dp(8), 0, dp(8)) })
             return
         }
-
         removeEmptyMessage(container, emptyText)
-        for ((stored, item) in incoming) {
-            if (existingRows[stored] == null) {
-                val row = createFileRow(item).apply { tag = stored }
-                container.addView(row, 0)
-            }
-        }
+        for ((stored, item) in incoming) if (existingRows[stored] == null) container.addView(createFileRow(item).apply { tag = stored }, 0)
     }
 
     private fun createFileRow(item: JSONObject): LinearLayout {
@@ -552,58 +513,30 @@ class MainActivity : AppCompatActivity() {
         val type = item.optString("type", "file")
         val mime = item.optString("content_type", "application/octet-stream")
         val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-            setOnClickListener {
-                if (type == "image") showImagePreview(path, name, mime) else downloadFile(path, name, mime)
-            }
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6))
+            setOnClickListener { if (type == "image") showImagePreview(path, name, mime) else downloadFile(path, name, mime) }
         }
         if (type == "image") {
             val fullUrl = buildFileUrl(path)
-            val image = ImageView(this).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(72), dp(72))
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                setBackgroundColor(0xFF2B2B2B.toInt())
-                contentDescription = name
-                tag = "thumbnail:$fullUrl"
-            }
-            row.addView(image)
-            loadThumbnail(fullUrl, image)
-        } else {
-            row.addView(TextView(this).apply {
-                text = "📄"
-                textSize = 30f
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(dp(72), dp(72))
-            })
-        }
-        row.addView(TextView(this).apply {
-            text = "$name\n${formatSize(size)}"
-            textSize = 14f
-            setPadding(dp(12), 0, dp(8), 0)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
+            val image = ImageView(this).apply { layoutParams = LinearLayout.LayoutParams(dp(72), dp(72)); scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF2B2B2B.toInt()); contentDescription = name; tag = "thumbnail:$fullUrl" }
+            row.addView(image); loadThumbnail(fullUrl, image)
+        } else row.addView(TextView(this).apply { text = "📄"; textSize = 30f; gravity = Gravity.CENTER; layoutParams = LinearLayout.LayoutParams(dp(72), dp(72)) })
+        row.addView(TextView(this).apply { text = "$name\n${formatSize(size)}"; textSize = 14f; setPadding(dp(12), 0, dp(8), 0); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
         return row
     }
 
     private fun buildFileUrl(path: String): String {
         if (path.startsWith("http://") || path.startsWith("https://")) return path
-        val base = currentServerUrl()
-        if (base.isBlank()) return path
+        val base = currentServerUrl(); if (base.isBlank()) return path
         return "$base${if (path.startsWith("/")) path else "/$path"}"
     }
 
     private fun loadThumbnail(url: String, image: ImageView) {
         Thread {
             val cached = thumbnailCache.get(url)
-            if (cached != null) {
-                runOnUiThread { if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(cached) }
-                return@Thread
-            }
+            if (cached != null) { runOnUiThread { if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(cached) }; return@Thread }
             try {
-                val request = requestBuilder(url).get().build()
-                client.newCall(request).execute().use { response ->
+                client.newCall(requestBuilder(url).get().build()).execute().use { response ->
                     if (!response.isSuccessful) return@use
                     val bytes = response.body?.bytes() ?: return@use
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return@use
@@ -615,33 +548,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showImagePreview(path: String, name: String, mime: String) {
-        val base = currentServerUrl()
-        if (base.isBlank() || path.isBlank()) return
+        if (currentServerUrl().isBlank() || path.isBlank()) return
         val fullUrl = buildFileUrl(path)
-        val imageView = ImageView(this).apply {
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            minimumHeight = dp(220)
-            contentDescription = name
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(name)
-            .setView(imageView)
-            .setNegativeButton("Close", null)
-            .setPositiveButton("Download") { _, _ -> downloadFile(path, name, mime) }
-            .create()
+        val imageView = ImageView(this).apply { adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER; setPadding(dp(8), dp(8), dp(8), dp(8)); minimumHeight = dp(220); contentDescription = name }
+        val dialog = AlertDialog.Builder(this).setTitle(name).setView(imageView).setNegativeButton("Close", null).setPositiveButton("Download") { _, _ -> downloadFile(path, name, mime) }.create()
         dialog.show()
         Thread {
-            try {
-                val request = requestBuilder(fullUrl).get().build()
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use
-                    val bytes = response.body?.bytes() ?: return@use
-                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options())
-                    if (bitmap != null) runOnUiThread { if (dialog.isShowing) imageView.setImageBitmap(bitmap) }
-                }
-            } catch (_: Exception) { }
+            try { client.newCall(requestBuilder(fullUrl).get().build()).execute().use { response -> if (response.isSuccessful) { val bytes = response.body?.bytes(); val bitmap = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }; if (bitmap != null) runOnUiThread { if (dialog.isShowing) imageView.setImageBitmap(bitmap) } } } } catch (_: Exception) { }
         }.start()
     }
 
@@ -654,84 +567,38 @@ class MainActivity : AppCompatActivity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun downloadFile(path: String, name: String, mime: String) {
-        val base = currentServerUrl()
-        if (base.isBlank() || path.isBlank()) {
-            Toast.makeText(this, "Server not connected", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val fullUrl = buildFileUrl(path)
-        val progressKey = "download_${System.nanoTime()}"
+        if (currentServerUrl().isBlank() || path.isBlank()) { Toast.makeText(this, "Server not connected", Toast.LENGTH_SHORT).show(); return }
+        val fullUrl = buildFileUrl(path); val progressKey = "download_${System.nanoTime()}"
         runOnUiThread { ensureProgressRow(receivedFilesContainer, progressKey, "Downloading $name") }
         Thread {
             try {
-                val request = requestBuilder(fullUrl).get().build()
-                client.newCall(request).execute().use { response ->
+                client.newCall(requestBuilder(fullUrl).get().build()).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
-                    val body = response.body ?: error("Empty file")
-                    val total = body.contentLength()
-                    var received = 0L
-                    val values = ContentValues().apply {
-                        put(MediaStore.Downloads.DISPLAY_NAME, name)
-                        put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
-                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                        put(MediaStore.Downloads.IS_PENDING, 1)
-                    }
+                    val body = response.body ?: error("Empty file"); val total = body.contentLength(); var received = 0L
+                    val values = ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, name); put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" }); put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS); put(MediaStore.Downloads.IS_PENDING, 1) }
                     val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Cannot create download")
                     try {
-                        contentResolver.openOutputStream(uri).use { output ->
-                            requireNotNull(output) { "Cannot open download" }
-                            body.byteStream().use { input ->
-                                val buffer = ByteArray(64 * 1024)
-                                while (true) {
-                                    val read = input.read(buffer)
-                                    if (read <= 0) break
-                                    output.write(buffer, 0, read)
-                                    received += read
-                                    if (total > 0) {
-                                        val percent = ((received * 100L) / total).toInt().coerceIn(0, 100)
-                                        handler.post {
-                                            val row = activeProgressRows[progressKey]
-                                            val bar = row?.findViewWithTag<ProgressBar>("progress_bar")
-                                            if (bar != null) bar.progress = percent
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        contentResolver.openOutputStream(uri).use { output -> requireNotNull(output) { "Cannot open download" }; body.byteStream().use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) { val read = input.read(buffer); if (read <= 0) break; output!!.write(buffer, 0, read); received += read; if (total > 0) handler.post { activeProgressRows[progressKey]?.findViewWithTag<ProgressBar>("progress_bar")?.progress = ((received * 100L) / total).toInt().coerceIn(0, 100) } }
+                        } }
                         contentResolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
                         runOnUiThread { Toast.makeText(this, "Downloaded: $name", Toast.LENGTH_SHORT).show() }
-                    } catch (e: Exception) {
-                        contentResolver.delete(uri, null, null)
-                        throw e
-                    }
+                    } catch (e: Exception) { contentResolver.delete(uri, null, null); throw e }
                 }
-            } catch (e: Exception) {
-                runOnUiThread { Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() }
-            } finally {
-                runOnUiThread { removeProgressRow(progressKey) }
-            }
+            } catch (e: Exception) { runOnUiThread { Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() } }
+            finally { runOnUiThread { removeProgressRow(progressKey) } }
         }.start()
     }
 
-    private class ProgressFileRequestBody(
-        private val file: File,
-        private val mediaType: MediaType,
-        private val onProgress: (written: Long, total: Long) -> Unit
-    ) : RequestBody() {
+    private class ProgressFileRequestBody(private val file: File, private val mediaType: MediaType, private val onProgress: (Long, Long) -> Unit) : RequestBody() {
         override fun contentType(): MediaType = mediaType
         override fun contentLength(): Long = file.length()
         override fun writeTo(sink: BufferedSink) {
-            val total = contentLength()
-            var written = 0L
+            val total = contentLength(); var written = 0L
             FileInputStream(file).use { input ->
                 val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    sink.write(buffer, 0, read)
-                    written += read
-                    onProgress(written, total)
-                }
+                while (true) { val read = input.read(buffer); if (read <= 0) break; sink.write(buffer, 0, read); written += read; onProgress(written, total) }
             }
         }
     }
