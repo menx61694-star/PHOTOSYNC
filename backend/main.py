@@ -1,12 +1,15 @@
 from pathlib import Path
 from uuid import uuid4
+import asyncio
 import re, json, socket, threading, hashlib, secrets
 from datetime import datetime, timezone
+from urllib.parse import quote
+from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pin_auth import install as install_pin_auth
+from pin_auth import install as install_pin_auth, session_phone_cookie
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
@@ -25,6 +28,7 @@ app.add_middleware(CORSMiddleware,allow_origins=['*'],allow_credentials=True,all
 app.mount('/dashboard',StaticFiles(directory=WEB_DIR,html=True),name='dashboard')
 install_pin_auth(app)
 _accounts_lock=threading.Lock()
+_direct_opener=build_opener(ProxyHandler({}))
 
 def _load_accounts():
     try:
@@ -130,19 +134,21 @@ def web_client_session():
 def web_client_state(web_client_id:str):
     meta=get_web_meta(web_client_id);paired=safe_device_id(meta.get('paired_device_id',''));return {'web_client_id':safe_device_id(web_client_id),'paired_device_id':paired or None,'sent':read_json(web_history_path(web_client_id,'sent'),[]),'received':read_json(web_history_path(web_client_id,'received'),[])}
 @app.post('/web-client/pair')
-def web_client_pair(web_client_id:str=Form(...),device_id:str=Form(...)):
+def web_client_pair(request:Request,web_client_id:str=Form(...),device_id:str=Form(...)):
     cid=safe_device_id(web_client_id);did=safe_device_id(device_id)
     if not cid or not did:raise HTTPException(400,'web_client_id and device_id required')
     if did not in manager.devices():raise HTTPException(409,'Selected phone is not connected')
-    meta=get_web_meta(cid);meta['paired_device_id']=did;write_json(web_meta_path(cid),meta);return {'ok':True,'web_client_id':cid,'paired_device_id':did}
+    phone_cookie=getattr(request.state,'photosync_phone_cookie','') or ''
+    if not phone_cookie:raise HTTPException(502,'Phone pairing succeeded but its session cookie was not returned')
+    meta=get_web_meta(cid);meta['paired_device_id']=did;meta['phone_session_cookie']=phone_cookie;meta['phone_ip']=manager.ip_for_device(did);write_json(web_meta_path(cid),meta)
+    return {'ok':True,'web_client_id':cid,'paired_device_id':did}
 @app.post('/web-client/unpair')
 def web_client_unpair(web_client_id:str=Form(...)):
-    cid=safe_device_id(web_client_id);meta=get_web_meta(cid);meta['paired_device_id']=None;write_json(web_meta_path(cid),meta);return {'ok':True}
+    cid=safe_device_id(web_client_id);meta=get_web_meta(cid);meta['paired_device_id']=None;meta.pop('phone_session_cookie',None);meta.pop('phone_ip',None);write_json(web_meta_path(cid),meta);return {'ok':True}
 @app.get('/web-client/files')
 def web_client_files(web_client_id:str,kind:str='sent'):
     if kind not in {'sent','received'}:raise HTTPException(400,'invalid kind')
-    get_web_meta(web_client_id)
-    return read_json(web_history_path(web_client_id,kind),[])
+    get_web_meta(web_client_id);return read_json(web_history_path(web_client_id,kind),[])
 @app.get('/web-client/file/{web_client_id}/{device_id}/{source}/{filename}')
 def web_client_file(web_client_id:str,device_id:str,source:str,filename:str):
     cid=safe_device_id(web_client_id);did=safe_device_id(device_id);filename=Path(filename).name
@@ -178,15 +184,38 @@ async def websocket_endpoint(websocket:WebSocket):
         while True:await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket);await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
+
+def _forward_to_phone(phone_ip,phone_cookie,filename,data,content_type):
+    if not phone_ip or not phone_cookie:raise RuntimeError('Phone is not paired for file transfer')
+    url=f'http://{phone_ip}:18000/upload?source=web&filename={quote(filename,safe="")}'
+    req=UrlRequest(url,data=data,method='POST',headers={'Cookie':phone_cookie,'Content-Type':content_type or 'application/octet-stream','Content-Length':str(len(data)),'Cache-Control':'no-store'})
+    with _direct_opener.open(req,timeout=max(15,min(300,15+len(data)//(1024*1024)))) as response:
+        body=response.read()
+        if not 200 <= response.status < 300:raise RuntimeError(f'Phone HTTP {response.status}')
+        try:return json.loads(body.decode('utf-8'))
+        except Exception:raise RuntimeError('Phone returned invalid upload response')
+
 @app.post('/upload')
 async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form(''),web_client_id:str=Form('')):
     source=source if source in {'web','app','unknown'} else 'unknown'
     if source=='web':
-        cid=safe_device_id(web_client_id);get_web_meta(cid);targets=[safe_device_id(target_device_id)] if target_device_id else manager.devices();targets=[d for d in targets if d]
+        cid=safe_device_id(web_client_id);meta=get_web_meta(cid);targets=[safe_device_id(target_device_id)] if target_device_id else ([safe_device_id(meta.get('paired_device_id',''))] if meta.get('paired_device_id') else manager.devices());targets=[d for d in targets if d]
         if not targets:raise HTTPException(400,'No connected phone')
         data=await file.read();original=safe_name(file.filename);transfer_id=uuid4().hex;results=[]
         for did in targets:
-            _,folder=device_dirs(did);destination=folder/f'{transfer_id}__web__{did}__{original}';destination.write_bytes(data);info=file_info(destination,'web',did,cid);info['content_type']=file.content_type or 'application/octet-stream';info['transfer_id']=transfer_id;results.append(info);await manager.send_to_device(did,{'type':'file_uploaded',**info})
+            if did not in manager.devices():raise HTTPException(409,f'Phone {did} is not connected')
+            phone_ip=manager.ip_for_device(did)
+            cookie=meta.get('phone_session_cookie','') if did==safe_device_id(meta.get('paired_device_id','')) else ''
+            if not cookie:raise HTTPException(403,'Phone must be paired again before sending files')
+            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':0,'total':len(data),'percent':0})
+            try:
+                phone_info=await asyncio.to_thread(_forward_to_phone,phone_ip,cookie,original,data,file.content_type or 'application/octet-stream')
+            except Exception as exc:
+                raise HTTPException(502,f'Phone transfer failed: {exc}')
+            phone_info['device_id']=did;phone_info['source']='received';phone_info['transfer_id']=transfer_id;phone_info['content_type']=file.content_type or 'application/octet-stream';phone_info['url']=f'http://{phone_ip}:18000{phone_info.get("url","")}'
+            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':len(data),'total':len(data),'percent':100})
+            await manager.send_to_device(did,{'type':'file_uploaded',**phone_info})
+            results.append(phone_info)
         entry=dict(results[0]);entry['targets']=[r['device_id'] for r in results];entry['source']='web';add_web_history(cid,'sent',entry);return entry
     owner=request_owner_id(request,device_id);folder,_=device_dirs(owner);original=safe_name(file.filename);transfer_id=uuid4().hex;total=int(file.size or 0);received=0;last=-1;destination=folder/f'{transfer_id}__{source}__{owner}__{original}'
     with destination.open('wb') as output:
@@ -209,8 +238,7 @@ def account_signup(name:str=Form(...),mobile:str=Form(...),username:str=Form(...
 @app.post('/account/login')
 def account_login(email:str=Form(...),password:str=Form(...)):
     email=_clean_text(email,160).lower()
-    with _accounts_lock:
-        accounts=_load_accounts();account=next((a for a in accounts.values() if a.get('email')==email),None)
+    with _accounts_lock:accounts=_load_accounts();account=next((a for a in accounts.values() if a.get('email')==email),None)
     if not account or not _verify_password(password,account.get('password_salt',''),account.get('password_hash','')):raise HTTPException(401,'Invalid email or password')
     return {'ok':True,'message':'Login successful','account':{k:account.get(k,'') for k in ('name','mobile','username','email')}}
 @app.post('/feedback')
