@@ -8,9 +8,6 @@ from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
-# The Android app owns the pairing PIN. The external PC server never generates
-# or persists a server-wide PIN. For browser pairing, the PC server forwards
-# the entered PIN to the selected phone's embedded Android server.
 SESSION_TTL_SECONDS = 30 * 60
 MAX_ATTEMPTS_PER_MINUTE = 5
 _LOCAL_SERVER_PORT = 18000
@@ -49,6 +46,15 @@ def session_device(token):
         return data.get("device_id") if data else None
 
 
+def session_phone_cookie(token):
+    if not token:
+        return None
+    with _lock:
+        _cleanup()
+        data = _sessions.get(token)
+        return data.get("phone_cookie") if data else None
+
+
 def _client_ip(request: Request):
     return request.client.host if request.client else "unknown"
 
@@ -67,24 +73,22 @@ def _verify_phone_pin(phone_ip: str, pin: str):
     phone_ip = _safe_phone_ip(phone_ip)
     pin = (pin or "").strip()
     if not phone_ip or not pin.isdigit() or len(pin) != 6:
-        return False
+        return False, None
 
-    # The PIN is checked by the Android app itself. The PC server only relays
-    # the challenge and does not store the PIN.
     query = urlencode({"pin": pin})
     url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}/api/pair?{query}"
     try:
         req = UrlRequest(url, method="POST", headers={"Cache-Control": "no-store"})
         with _direct_opener.open(req, timeout=2.5) as response:
-            return 200 <= response.status < 300
+            cookie = response.headers.get("Set-Cookie", "")
+            return (200 <= response.status < 300), cookie
     except Exception:
-        # Compatibility with older Android local-server builds that accepted
-        # the pairing request through GET.
         try:
             with _direct_opener.open(url, timeout=2.5) as response:
-                return 200 <= response.status < 300
+                cookie = response.headers.get("Set-Cookie", "")
+                return (200 <= response.status < 300), cookie
         except Exception:
-            return False
+            return False, None
 
 
 def _create_session(pin: str, phone_ip: str, device_id: str, request: Request):
@@ -98,7 +102,8 @@ def _create_session(pin: str, phone_ip: str, device_id: str, request: Request):
         if len(attempts) >= MAX_ATTEMPTS_PER_MINUTE:
             raise HTTPException(429, "Too many PIN attempts; try again later")
 
-    if not _verify_phone_pin(phone_ip, pin):
+    verified, phone_cookie = _verify_phone_pin(phone_ip, pin)
+    if not verified:
         with _lock:
             _attempts[key].append(now)
         raise HTTPException(403, "Invalid PIN or phone is unreachable")
@@ -106,7 +111,12 @@ def _create_session(pin: str, phone_ip: str, device_id: str, request: Request):
     with _lock:
         _attempts[key].clear()
         token = secrets.token_urlsafe(32)
-        _sessions[token] = {"expires": now + SESSION_TTL_SECONDS, "device_id": device_id}
+        _sessions[token] = {
+            "expires": now + SESSION_TTL_SECONDS,
+            "device_id": device_id,
+            "phone_cookie": phone_cookie or "",
+            "phone_ip": phone_ip,
+        }
     return token
 
 
@@ -123,10 +133,6 @@ def _set_session_cookie(response, token):
 
 
 def _set_session_header(response, token):
-    # Standalone.html can be opened from a different origin (including file://).
-    # Such a page cannot rely on same-origin cookies, so expose the short-lived
-    # bearer token explicitly. The token is still never persisted by the PC
-    # server on disk and expires after SESSION_TTL_SECONDS.
     response.headers["X-PhotoSync-Session"] = token
     response.headers["Access-Control-Expose-Headers"] = "X-PhotoSync-Session"
 
@@ -154,7 +160,6 @@ def logout(token=None):
 
 
 def _live_app_request(request: Request):
-    """Trust the app identity only when it matches a live WebSocket peer IP."""
     device_id = (request.headers.get("X-PhotoSync-Device-ID") or "").strip()
     if not device_id:
         return False
@@ -210,8 +215,6 @@ def install(app):
             "message": "Enter the PIN shown for the selected phone in the PhotoSync app",
         }
 
-    # Compatibility endpoint. It requires a selected phone because the PC
-    # server itself does not own a PIN.
     @app.post("/api/pair")
     def pair_endpoint(request: Request, pin: str, device_ip: str = "", device_id: str = ""):
         if not device_ip or not device_id:
@@ -236,10 +239,6 @@ def install(app):
     @app.middleware("http")
     async def pin_gate(request: Request, call_next):
         path = request.url.path
-
-        # Browser pairing is per-phone. The PIN stays in a request header and
-        # is immediately forwarded to the selected phone; it is never stored
-        # in the PC server's files or configuration.
         if path == "/web-client/pair":
             pin = request.headers.get(_PAIR_PIN_HEADER, "").strip()
             phone_ip = request.headers.get(_PAIR_IP_HEADER, "").strip()
@@ -252,6 +251,7 @@ def install(app):
                 token = _create_session(pin, phone_ip, device_id, request)
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            request.state.photosync_phone_cookie = session_phone_cookie(token)
             response = await call_next(request)
             if response.status_code < 400:
                 _set_session_cookie(response, token)
@@ -261,13 +261,9 @@ def install(app):
                     _sessions.pop(token, None)
             return response
 
-        # These bootstrap endpoints expose no file contents.
         if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        # A device header alone is not sufficient: browsers can spoof headers.
-        # Require the request source IP to match the live WebSocket connection
-        # registered for that device ID.
         if request.headers.get(_APP_TRUST_HEADER) and _live_app_request(request):
             return await call_next(request)
 
