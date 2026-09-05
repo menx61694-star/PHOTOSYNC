@@ -1,5 +1,6 @@
 package com.photosync.uploader
 
+import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.os.Handler
@@ -7,6 +8,7 @@ import android.os.Looper
 import android.util.AttributeSet
 import android.view.Gravity
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -19,7 +21,9 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val address = TextView(context)
     private val pin = TextView(context)
     private val refreshPin = Button(context)
-    private var attached = false
+    private val serverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    @Volatile private var attached = false
+    @Volatile private var startRequested = false
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -45,10 +49,10 @@ class LocalServerInfoView @JvmOverloads constructor(
             val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
             if (!app.localServer.isRunning()) return@setOnClickListener
             refreshPin.isEnabled = false
-            Thread {
-                runCatching { app.localServer.refreshPin() }
+            serverExecutor.execute {
+                try { app.localServer.refreshPin() } catch (_: Throwable) { }
                 handler.post { if (attached) updateInfo() }
-            }.start()
+            }
         }
         val row = LinearLayout(context).apply {
             orientation = HORIZONTAL
@@ -64,6 +68,25 @@ class LocalServerInfoView @JvmOverloads constructor(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         attached = true
+        val app = context.applicationContext as? PhotoSyncApplication
+        if (app != null && !app.localServer.isRunning() && !startRequested) {
+            startRequested = true
+            status.text = "● Local Server: Starting…"
+            refreshPin.isEnabled = false
+            serverExecutor.execute {
+                val started = try { app.localServer.start() } catch (_: Throwable) { false }
+                handler.post {
+                    startRequested = false
+                    if (!attached) return@post
+                    if (started) updateInfo() else {
+                        status.text = "● Local Server: Not running"
+                        address.text = "Web address: unavailable"
+                        pin.text = "PIN: —"
+                        refreshPin.isEnabled = false
+                    }
+                }
+            }
+        }
         handler.removeCallbacks(refresh)
         handler.post(refresh)
     }
@@ -72,6 +95,20 @@ class LocalServerInfoView @JvmOverloads constructor(
         attached = false
         handler.removeCallbacks(refresh)
         super.onDetachedFromWindow()
+    }
+
+    private fun clearEmbeddedUrlFromTransferTarget(server: LocalServer) {
+        val activity = context as? Activity ?: return
+        val localUrl = server.url()?.removeSuffix("/") ?: return
+        val prefs = activity.getSharedPreferences("photosync", Context.MODE_PRIVATE)
+        val saved = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        if (saved != localUrl) return
+
+        // The embedded Android server is a receiver/browser endpoint, not the
+        // PC transfer target. Never let the app accidentally select itself as
+        // the destination for Send Files (that was the source of HTTP 401).
+        prefs.edit().remove("server_url").apply()
+        activity.findViewById<EditText>(R.id.serverUrlInput)?.setText("")
     }
 
     private fun updateInfo() {
@@ -89,5 +126,6 @@ class LocalServerInfoView @JvmOverloads constructor(
         address.text = "Web: ${server.url() ?: "Waiting for network…"}"
         pin.text = "Pairing PIN: ${server.currentPin()}"
         refreshPin.isEnabled = true
+        clearEmbeddedUrlFromTransferTarget(server)
     }
 }
