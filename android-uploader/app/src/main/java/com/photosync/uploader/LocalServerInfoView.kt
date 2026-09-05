@@ -24,6 +24,7 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val serverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     @Volatile private var attached = false
     @Volatile private var startRequested = false
+    @Volatile private var discoveryTriggered = false
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -109,6 +110,13 @@ class LocalServerInfoView @JvmOverloads constructor(
         // the destination for Send Files (that was the source of HTTP 401).
         prefs.edit().remove("server_url").apply()
         activity.findViewById<EditText>(R.id.serverUrlInput)?.setText("")
+
+        // Once the stale self URL is removed, immediately look for the PC
+        // server again instead of leaving the transfer destination empty.
+        if (!discoveryTriggered) {
+            discoveryTriggered = true
+            activity.findViewById<Button>(R.id.findServerButton)?.performClick()
+        }
     }
 
     private fun updateInfo() {
