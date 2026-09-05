@@ -111,11 +111,13 @@ class LocalServerInfoView @JvmOverloads constructor(
         prefs.edit().remove("server_url").apply()
         activity.findViewById<EditText>(R.id.serverUrlInput)?.setText("")
 
-        // Once the stale self URL is removed, immediately look for the PC
-        // server again instead of leaving the transfer destination empty.
+        // MainActivity can run its initial connection logic just before or
+        // after this view's asynchronous server startup. Retry discovery on a
+        // short cooldown so a race cannot put the embedded :18000 URL back.
         if (!discoveryTriggered) {
             discoveryTriggered = true
             activity.findViewById<Button>(R.id.findServerButton)?.performClick()
+            handler.postDelayed({ discoveryTriggered = false }, 4000)
         }
     }
 
