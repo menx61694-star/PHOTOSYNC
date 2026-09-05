@@ -10,14 +10,15 @@ if not exist .venv (
   %PY% -m venv .venv
 )
 call .venv\Scripts\activate.bat
-if "%FIRST_RUN%"=="1" (
-  echo Installing PHOTOSYNC dependencies - this happens only on first run...
-  python -m pip install -r requirements.txt
-  if errorlevel 1 (
-    echo Failed to install dependencies.
-    pause
-    exit /b 1
-  )
+
+rem Always sync the server environment. Existing .venv folders may contain an
+rem incompatible "multipart" package, which breaks FastAPI File/Form uploads.
+python -m pip uninstall -y multipart >nul 2>&1
+python -m pip install -r requirements.txt --upgrade
+if errorlevel 1 (
+  echo Failed to install/sync dependencies.
+  pause
+  exit /b 1
 )
 
 echo.
