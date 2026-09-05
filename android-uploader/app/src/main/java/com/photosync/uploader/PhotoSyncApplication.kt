@@ -8,11 +8,9 @@ class PhotoSyncApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Create the embedded server here, but let LocalServerInfoView own startup.
+        // This keeps socket binding out of Application startup.
         localServer = LocalServer(this, 18000)
-        // LocalServer safely converts startup failures into an unavailable
-        // server state, so the embedded server can start with the app without
-        // taking down the Android process.
-        localServer.start()
     }
 
     override fun onTerminate() {
