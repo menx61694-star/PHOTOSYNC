@@ -197,7 +197,6 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
                 if (startedNow || localServer.isRunning()) {
                     serverStatus.text = "● Local Server: Connected"
                     status.text = "Android local server ready ✓"
-                    refreshLists()
                 } else {
                     serverStatus.text = "● Local Server: Not running"
                     status.text = "Android local server could not start"
