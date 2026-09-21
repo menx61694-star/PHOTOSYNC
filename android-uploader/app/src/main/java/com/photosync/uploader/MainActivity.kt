@@ -254,8 +254,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         }
     }
 
-    private fun wsUrl(): String {
-        val base = currentServerUrl()
+    private fun wsUrl(baseUrl: String = currentServerUrl()): String {
+        val base = baseUrl.trim().removeSuffix("/")
         val id = URLEncoder.encode(deviceIdentity.id, "UTF-8")
         return when {
             base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws?device_id=$id"
@@ -278,7 +278,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         if (!started || !connectionEnabled || base.isBlank() || isLocalServerUrl(base)) return
         socket?.cancel()
         serverStatus.text = "● Server: Connecting…"
-        socket = client.newWebSocket(requestBuilder(wsUrl()).build(), object : WebSocketListener() {
+        socket = client.newWebSocket(requestBuilder(wsUrl(base)).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
                 runOnUiThread {
                     if (!connectionEnabled) { webSocket.close(1000, "User disconnected"); return@runOnUiThread }
