@@ -88,12 +88,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         mainScroll = findViewById(R.id.mainScroll)
 
         val savedServer = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
-        if (savedServer.isNotBlank() && isLocalServerUrl(savedServer)) {
-            prefs.edit().remove("server_url").apply()
-            serverUrlInput.setText("")
-        } else {
-            serverUrlInput.setText(savedServer)
-        }
+        serverUrlInput.setText(savedServer)
         applyThemeColor()
 
         findViewById<Button>(R.id.saveServerButton).setOnClickListener {
