@@ -154,23 +154,61 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))
             ?.trim()?.removeSuffix("/") ?: ""
 
-    private fun isLocalServerUrl(url: String): Boolean =
-        localServer.url()?.removeSuffix("/") == url.removeSuffix("/")
+    private fun isLocalServerUrl(url: String): Boolean {
+        val normalized = url.trim().removeSuffix("/")
+        if (normalized.isBlank()) return false
+        return try {
+            val parsed = java.net.URI(if (normalized.contains("://")) normalized else "http://$normalized")
+            val port = if (parsed.port == -1) 80 else parsed.port
+            val localHost = localServer.localIpv4()
+            port == 18000 && (
+                parsed.host == "localhost" ||
+                parsed.host == "127.0.0.1" ||
+                parsed.host == "0.0.0.0" ||
+                (localHost != null && parsed.host == localHost)
+            )
+        } catch (_: Exception) { false }
+    }
 
     private fun connectSavedOrDiscover() {
         val saved = currentServerUrl()
-        if (saved.isNotBlank() && !isLocalServerUrl(saved)) {
+        if (saved.isNotBlank() && isLocalServerUrl(saved)) {
+            selectEmbeddedServer(saved)
+            return
+        }
+        if (saved.isNotBlank()) {
             reconnectSocket()
             refreshLists()
             status.text = "Using saved server"
             return
         }
-        if (saved.isNotBlank() && isLocalServerUrl(saved)) {
-            prefs.edit().remove("server_url").apply()
-            serverUrlInput.setText("")
-        }
         serverStatus.text = "● Server: Searching LAN…"
         discoverServer()
+    }
+
+    private fun selectEmbeddedServer(url: String) {
+        connectionEnabled = true
+        val normalized = url.trim().removeSuffix("/")
+        prefs.edit().putString("server_url", normalized).apply()
+        serverUrlInput.setText(normalized)
+        socket?.close(1000, "Embedded server selected")
+        socket = null
+        serverStatus.text = "● Local Server: Starting…"
+        status.text = "Starting Android local server…"
+        Thread {
+            val startedNow = try { localServer.start() } catch (_: Throwable) { false }
+            runOnUiThread {
+                if (!started) return@runOnUiThread
+                if (startedNow || localServer.isRunning()) {
+                    serverStatus.text = "● Local Server: Connected"
+                    status.text = "Android local server ready ✓"
+                    refreshLists()
+                } else {
+                    serverStatus.text = "● Local Server: Not running"
+                    status.text = "Android local server could not start"
+                }
+            }
+        }.start()
     }
 
     private fun applyThemeColor() {
@@ -191,11 +229,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         prefs.edit().putString("server_url", normalized).apply()
         serverUrlInput.setText(normalized)
         if (isLocalServerUrl(normalized)) {
-            socket?.close(1000, "Local server selected")
-            socket = null
-            serverStatus.text = if (localServer.isRunning()) "● Local Server: Connected" else "● Local Server: Not running"
-            status.text = if (localServer.isRunning()) "Android local server ready ✓" else "Android local server is not running"
-            refreshLists()
+            selectEmbeddedServer(normalized)
             return
         }
         status.text = "Connecting…"
