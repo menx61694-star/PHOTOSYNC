@@ -213,6 +213,66 @@ def _forward_file_to_phone(phone_ip,phone_cookie,filename,file_obj,total_size,co
     finally:
         conn.close()
 
+@app.post('/upload-stream')
+async def upload_stream(request:Request, source:str='app', filename:str='file', device_id:str=''):
+    source = source if source in {'app','received'} else 'app'
+    owner = request_owner_id(request, device_id)
+    folder, _ = device_dirs(owner)
+    original = safe_name(filename)
+    transfer_id = uuid4().hex
+    total = int(request.headers.get('content-length') or 0)
+    if total <= 0:
+        raise HTTPException(411, 'Content-Length required')
+    if total > 2 * 1024 * 1024 * 1024:
+        raise HTTPException(413, 'File too large')
+
+    destination = folder / f'{transfer_id}__{source}__{owner}__{original}'
+    received = 0
+    last = -1
+    try:
+        with destination.open('wb') as output:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                output.write(chunk)
+                received += len(chunk)
+                if received > total:
+                    raise HTTPException(400, 'Request body is larger than declared Content-Length')
+                if total > 0:
+                    percent = min(100, int(received * 100 / total))
+                    if percent != last:
+                        last = percent
+                        await manager.send_to_device(owner, {
+                            'type':'upload_progress',
+                            'transfer_id':transfer_id,
+                            'source':source,
+                            'device_id':owner,
+                            'filename':original,
+                            'received':received,
+                            'total':total,
+                            'percent':percent
+                        })
+            if received != total:
+                raise HTTPException(400, 'Incomplete upload')
+    except HTTPException:
+        try: destination.unlink(missing_ok=True)
+        except Exception: pass
+        raise
+    except Exception as exc:
+        try: destination.unlink(missing_ok=True)
+        except Exception: pass
+        raise HTTPException(500, f'Stream upload failed: {exc}')
+
+    info = file_info(destination, source, owner)
+    info['content_type'] = request.headers.get('content-type','application/octet-stream')
+    info['transfer_id'] = transfer_id
+    await manager.send_to_device(owner, {
+        'type':'file_uploaded',
+        **info
+    })
+    append_received_to_paired_web_clients(owner, info)
+    return info
+
 @app.post('/upload')
 async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form(''),web_client_id:str=Form('')):
     source=source if source in {'web','app','unknown'} else 'unknown'
