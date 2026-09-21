@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
     private val thumbnailCache by lazy { ThumbnailCache(cacheDir) }
     private val localServer by lazy { (application as PhotoSyncApplication).localServer }
     private var socket: WebSocket? = null
+    private var backendServerUrl = ""
     private var started = false
     private var connectionEnabled = true
     private var discoveryInProgress = false
@@ -87,6 +88,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         mainScroll = findViewById(R.id.mainScroll)
 
         val savedServer = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        backendServerUrl = prefs.getString("backend_server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        if (savedServer.isNotBlank() && !isLocalServerUrl(savedServer)) backendServerUrl = savedServer
         serverUrlInput.setText(savedServer)
         applyThemeColor()
 
@@ -145,7 +148,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         connectionEnabled = false
         socket?.close(1000, "User disconnected")
         socket = null
-        prefs.edit().remove("server_url").apply()
+        prefs.edit().remove("server_url").remove("backend_server_url").apply()
+        backendServerUrl = ""
         serverUrlInput.setText("")
         serverStatus.text = "● Server: Disconnected"
         status.text = "Disconnected"
@@ -175,6 +179,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         val saved = currentServerUrl()
         if (saved.isNotBlank() && isLocalServerUrl(saved)) {
             selectEmbeddedServer(saved)
+            if (backendServerUrl.isNotBlank()) reconnectSocket(backendServerUrl)
+            else discoverServer(forLocalServer = true)
             return
         }
         if (saved.isNotBlank()) {
@@ -222,15 +228,19 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
             if (normalized.isBlank()) return
             connectionEnabled = true
             if (isLocalServerUrl(normalized)) {
-                // Do not persist or mutate the EditText until the local-server
-                // classification succeeds; this keeps manual input side-effect free.
                 selectEmbeddedServer(normalized)
+                if (backendServerUrl.isNotBlank()) reconnectSocket(backendServerUrl)
+                else discoverServer(forLocalServer = true)
                 return
             }
-            prefs.edit().putString("server_url", normalized).apply()
+            backendServerUrl = normalized
+            prefs.edit()
+                .putString("server_url", normalized)
+                .putString("backend_server_url", normalized)
+                .apply()
             serverUrlInput.setText(normalized)
             status.text = "Connecting…"
-            reconnectSocket()
+            reconnectSocket(normalized)
             refreshLists()
         } catch (t: Throwable) {
             serverStatus.text = "● Server: Connection failed"
@@ -251,14 +261,14 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
     private fun requestBuilder(url: String): Request.Builder =
         Request.Builder().url(url).header("X-PhotoSync-Device-ID", deviceIdentity.id)
 
-    private fun reconnectSocket() {
+    private fun reconnectSocket(serverUrl: String = backendServerUrl.ifBlank { currentServerUrl() }) {
         socket?.close(1000, "Reconnect")
         socket = null
-        if (started && connectionEnabled && currentServerUrl().isNotBlank() && !isLocalServerUrl(currentServerUrl())) connectSocket()
+        if (started && connectionEnabled && serverUrl.isNotBlank() && !isLocalServerUrl(serverUrl)) connectSocket(serverUrl)
     }
 
-    private fun connectSocket() {
-        val base = currentServerUrl()
+    private fun connectSocket(serverUrl: String = backendServerUrl.ifBlank { currentServerUrl() }) {
+        val base = serverUrl.trim().removeSuffix("/")
         if (!started || !connectionEnabled || base.isBlank() || isLocalServerUrl(base)) return
         socket?.cancel()
         serverStatus.text = "● Server: Connecting…"
@@ -350,7 +360,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         return result.distinctBy { it.hostAddress }
     }
 
-    private fun discoverServer() {
+    private fun discoverServer(forLocalServer: Boolean = false) {
         if (!started || !connectionEnabled || discoveryInProgress) return
         discoveryInProgress = true
         serverStatus.text = "● Server: Searching LAN…"
@@ -383,8 +393,15 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
                 discoveryInProgress = false
                 if (!started || !connectionEnabled) return@runOnUiThread
                 if (foundUrl != null) {
-                    saveAndConnect(foundUrl!!)
-                    status.text = "Server found automatically ✓"
+                    if (forLocalServer) {
+                        backendServerUrl = foundUrl!!
+                        prefs.edit().putString("backend_server_url", foundUrl).apply()
+                        reconnectSocket(foundUrl)
+                        status.text = "Local server ready; PC server connected ✓"
+                    } else {
+                        saveAndConnect(foundUrl!!)
+                        status.text = "Server found automatically ✓"
+                    }
                 } else {
                     serverStatus.text = "● Server: Not found"
                     status.text = "No external PC server found — enter URL or tap Find Server"
