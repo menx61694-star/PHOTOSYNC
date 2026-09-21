@@ -188,33 +188,21 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
     }
 
     private fun selectEmbeddedServer(url: String) {
-        // LocalServerInfoView owns embedded-server startup. Do not start the same
-        // ServerSocket again from Activity; manual selection only selects it.
+        // The embedded server has a single owner: LocalServerInfoView.
+        // Manual selection must only select the already-running local endpoint.
         connectionEnabled = true
         val normalized = url.trim().removeSuffix("/")
-        prefs.edit().putString("server_url", normalized).apply()
         socket?.close(1000, "Embedded server selected")
         socket = null
-        serverStatus.text = "● Local Server: Starting…"
-        status.text = "Starting Android local server…"
-        Thread {
-            val ok = try {
-                localServer.isRunning() || localServer.start()
-            } catch (_: Throwable) {
-                false
-            }
-            runOnUiThread {
-                if (!started) return@runOnUiThread
-                if (ok && localServer.isRunning()) {
-                    serverUrlInput.setText(normalized)
-                    serverStatus.text = "● Local Server: Connected"
-                    status.text = "Android local server ready ✓"
-                } else {
-                    serverStatus.text = "● Local Server: Not running"
-                    status.text = "Android local server could not start"
-                }
-            }
-        }.start()
+        prefs.edit().putString("server_url", normalized).apply()
+        serverUrlInput.setText(normalized)
+        if (localServer.isRunning()) {
+            serverStatus.text = "● Local Server: Connected"
+            status.text = "Android local server ready ✓"
+        } else {
+            serverStatus.text = "● Local Server: Starting…"
+            status.text = "Waiting for Android local server…"
+        }
     }
 
     private fun applyThemeColor() {
