@@ -37,7 +37,6 @@ import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.FileInputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
@@ -393,16 +392,6 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         return "file_${System.currentTimeMillis()}"
     }
 
-    private fun prepareUpload(uri: Uri, originalName: String): File {
-        val ext = originalName.substringAfterLast('.', "bin").replace(Regex("[^A-Za-z0-9]"), "")
-        val temp = File(cacheDir, "upload_${System.currentTimeMillis()}.$ext")
-        contentResolver.openInputStream(uri).use { input ->
-            requireNotNull(input) { "Unable to open file" }
-            temp.outputStream().use { output -> input.copyTo(output) }
-        }
-        return temp
-    }
-
     private fun ensureProgressRow(container: LinearLayout, key: String, label: String): Pair<View, ProgressBar> {
         val existing = activeProgressRows[key]
         if (existing != null) {
@@ -436,34 +425,40 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
             runOnUiThread { status.text = "Connect to the external PC server first" }
             return
         }
+
         val originalName = displayName(uri)
         val progressKey = "app_${System.nanoTime()}"
         runOnUiThread { ensureProgressRow(sentFilesContainer, progressKey, "Sending $originalName") }
+
         Thread {
-            var temp: File? = null
             try {
-                runOnUiThread { status.text = "Preparing $originalName…" }
-                temp = prepareUpload(uri, originalName)
+                runOnUiThread { status.text = "Sending $originalName…" }
                 val mime = contentResolver.getType(uri) ?: "application/octet-stream"
-                val progressBody = ProgressFileRequestBody(temp, mime.toMediaType()) { sent, total ->
+                val body = UriStreamRequestBody(contentResolver, uri, mime.toMediaType()) { sent, total ->
                     val percent = if (total > 0L) ((sent * 100L) / total).toInt().coerceIn(0, 100) else 0
                     handler.post {
-                        val bar = activeProgressRows[progressKey]?.findViewWithTag<ProgressBar>("progress_bar")
-                        if (bar != null) bar.progress = percent
+                        activeProgressRows[progressKey]
+                            ?.findViewWithTag<ProgressBar>("progress_bar")
+                            ?.progress = percent
                     }
                 }
-                val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("file", originalName, progressBody)
-                    .addFormDataPart("source", "app")
-                    .addFormDataPart("device_id", deviceIdentity.id)
-                    .build()
-                val request = requestBuilder("$serverUrl/upload").post(multipart).build()
-                client.newCall(request).execute().use { response -> if (!response.isSuccessful) error("HTTP ${response.code}") }
-                runOnUiThread { removeProgressRow(progressKey); status.text = "Sent ✓ $originalName" }
+                val request = requestBuilder(
+                    "$serverUrl/upload-stream?source=app&filename=${URLEncoder.encode(originalName, "UTF-8")}"
+                ).post(body).build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                }
+                runOnUiThread {
+                    removeProgressRow(progressKey)
+                    status.text = "Sent ✓ $originalName"
+                }
                 refreshLists()
             } catch (e: Exception) {
-                runOnUiThread { removeProgressRow(progressKey); status.text = "Send failed: ${e.message}" }
-            } finally { temp?.delete() }
+                runOnUiThread {
+                    removeProgressRow(progressKey)
+                    status.text = "Send failed: ${e.message}"
+                }
+            }
         }.start()
     }
 
@@ -619,14 +614,37 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         }.start()
     }
 
-    private class ProgressFileRequestBody(private val file: File, private val mediaType: MediaType, private val onProgress: (Long, Long) -> Unit) : RequestBody() {
+    private class UriStreamRequestBody(
+        private val resolver: android.content.ContentResolver,
+        private val uri: Uri,
+        private val mediaType: MediaType,
+        private val onProgress: (Long, Long) -> Unit
+    ) : RequestBody() {
         override fun contentType(): MediaType = mediaType
-        override fun contentLength(): Long = file.length()
+
+        override fun contentLength(): Long {
+            return try {
+                resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getLong(0).takeIf { it >= 0L } ?: -1L else -1L
+                } ?: -1L
+            } catch (_: Exception) {
+                -1L
+            }
+        }
+
         override fun writeTo(sink: BufferedSink) {
-            val total = contentLength(); var written = 0L
-            FileInputStream(file).use { input ->
+            val total = contentLength()
+            var written = 0L
+            resolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "Unable to open file" }
                 val buffer = ByteArray(64 * 1024)
-                while (true) { val read = input.read(buffer); if (read <= 0) break; sink.write(buffer, 0, read); written += read; onProgress(written, total) }
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    sink.write(buffer, 0, read)
+                    written += read
+                    onProgress(written, total)
+                }
             }
         }
     }
