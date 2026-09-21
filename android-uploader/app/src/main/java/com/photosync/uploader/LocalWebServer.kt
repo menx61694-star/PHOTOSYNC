@@ -125,6 +125,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                 val authorized = isAuthorized(token) || appTrusted
                 val response = when {
                     path == "/" || path == "/dashboard" || path == "/dashboard/" -> html(page())
+                    path == "/health" && method == "GET" -> json("{\"ok\":true,\"running\":"+isRunning()+"}")
                     path == "/api/pair" && method == "POST" -> pair(clientIp, query["pin"] ?: "")
                     path == "/api/session" -> if (authorized) json("{\"authorized\":true,\"expires_in_seconds\":1800}") else json("{\"authorized\":false}", "401 Unauthorized")
                     path == "/api/logout" && method == "POST" -> logout()
@@ -136,7 +137,9 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                     else -> Response("404 Not Found", "text/plain; charset=utf-8", "Not found")
                 }
                 write(it, response)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                try { write(it, json("{\"detail\":\"Server error\"}", "500 Internal Server Error")) } catch (_: Exception) { }
+            }
         }
     }
 
@@ -147,7 +150,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     private fun write(socket: Socket, response: Response) {
         val body = response.bytes ?: response.body.toByteArray(Charsets.UTF_8)
         val cookie = response.cookie?.let { "Set-Cookie: $it\r\n" } ?: ""
-        val headers = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.type}\r\nContent-Length: ${body.size}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\n${response.extra}$cookie\r\nConnection: close\r\n\r\n"
+        val headers = "HTTP/1.1 ${response.status}\r\nContent-Type: ${response.type}\r\nContent-Length: ${body.size}\r\nConnection: close\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\n${response.extra}$cookie\r\n\r\n"
         socket.getOutputStream().use { out -> out.write(headers.toByteArray(Charsets.US_ASCII)); out.write(body); out.flush() }
     }
 
