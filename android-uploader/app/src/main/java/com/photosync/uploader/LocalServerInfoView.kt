@@ -26,7 +26,7 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val refresh = object : Runnable {
         override fun run() {
             if (!attached) return
-            updateInfo()
+            refreshInfoAsync()
             handler.postDelayed(this, 1000)
         }
     }
@@ -67,16 +67,18 @@ class LocalServerInfoView @JvmOverloads constructor(
         super.onAttachedToWindow()
         attached = true
         val app = context.applicationContext as? PhotoSyncApplication
-        if (app != null && !app.localServer.isRunning() && !startRequested) {
+        if (app != null && !startRequested) {
             startRequested = true
             status.text = "● Local Server: Starting…"
             refreshPin.isEnabled = false
             serverExecutor.execute {
-                val started = try { app.localServer.start() } catch (_: Throwable) { false }
+                val started = try {
+                    if (app.localServer.isRunning()) true else app.localServer.start()
+                } catch (_: Throwable) { false }
                 handler.post {
                     startRequested = false
                     if (!attached) return@post
-                    if (started) updateInfo() else {
+                    if (started) refreshInfoAsync() else {
                         status.text = "● Local Server: Not running"
                         address.text = "Web address: unavailable"
                         pin.text = "PIN: —"
@@ -95,20 +97,29 @@ class LocalServerInfoView @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
-    private fun updateInfo() {
+    private fun refreshInfoAsync() {
         if (!attached) return
         val app = context.applicationContext as? PhotoSyncApplication ?: return
-        val server = app.localServer
-        if (!server.isRunning()) {
-            status.text = "● Local Server: Not running"
-            address.text = "Web address: unavailable"
-            pin.text = "PIN: —"
-            refreshPin.isEnabled = false
-            return
+        serverExecutor.execute {
+            val state = try {
+                val server = app.localServer
+                if (!server.isRunning()) null
+                else Triple(server.url(), server.currentPin(), true)
+            } catch (_: Throwable) { null }
+            handler.post {
+                if (!attached) return@post
+                if (state == null) {
+                    status.text = "● Local Server: Not running"
+                    address.text = "Web address: unavailable"
+                    pin.text = "PIN: —"
+                    refreshPin.isEnabled = false
+                } else {
+                    status.text = "● Local Server: Running"
+                    address.text = "Web: ${state.first ?: "Waiting for network…"}"
+                    pin.text = "Pairing PIN: ${state.second}"
+                    refreshPin.isEnabled = true
+                }
+            }
         }
-        status.text = "● Local Server: Running"
-        address.text = "Web: ${server.url() ?: "Waiting for network…"}"
-        pin.text = "Pairing PIN: ${server.currentPin()}"
-        refreshPin.isEnabled = true
     }
 }
