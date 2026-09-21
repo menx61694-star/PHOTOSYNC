@@ -125,13 +125,20 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
     }
 
     override fun onConnectRequested() {
-        connectionEnabled = true
-        val url = serverUrlInput.text.toString().trim().removeSuffix("/")
-        if (url.isBlank()) {
-            discoverServer()
-            return
+        try {
+            connectionEnabled = true
+            val url = serverUrlInput.text?.toString()?.trim()?.removeSuffix("/") ?: ""
+            if (url.isBlank()) {
+                discoverServer()
+                return
+            }
+            saveAndConnect(url)
+        } catch (t: Throwable) {
+            // Manual connection must never crash the Activity. Keep the URL field
+            // isolated from server startup/network failures and report the error.
+            serverStatus.text = "● Server: Connection failed"
+            status.text = "Invalid or unavailable server URL"
         }
-        saveAndConnect(url)
     }
 
     override fun onDisconnectRequested() {
@@ -205,18 +212,25 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
     }
 
     private fun saveAndConnect(url: String) {
-        val normalized = url.trim().removeSuffix("/")
-        if (normalized.isBlank()) return
-        connectionEnabled = true
-        prefs.edit().putString("server_url", normalized).apply()
-        serverUrlInput.setText(normalized)
-        if (isLocalServerUrl(normalized)) {
-            selectEmbeddedServer(normalized)
-            return
+        try {
+            val normalized = url.trim().removeSuffix("/")
+            if (normalized.isBlank()) return
+            connectionEnabled = true
+            if (isLocalServerUrl(normalized)) {
+                // Do not persist or mutate the EditText until the local-server
+                // classification succeeds; this keeps manual input side-effect free.
+                selectEmbeddedServer(normalized)
+                return
+            }
+            prefs.edit().putString("server_url", normalized).apply()
+            serverUrlInput.setText(normalized)
+            status.text = "Connecting…"
+            reconnectSocket()
+            refreshLists()
+        } catch (t: Throwable) {
+            serverStatus.text = "● Server: Connection failed"
+            status.text = "Invalid or unavailable server URL"
         }
-        status.text = "Connecting…"
-        reconnectSocket()
-        refreshLists()
     }
 
     private fun wsUrl(): String {
