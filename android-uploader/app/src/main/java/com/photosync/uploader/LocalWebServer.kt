@@ -31,6 +31,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
 
     init { uploads.mkdirs(); downloads.mkdirs() }
 
+    @Synchronized
     fun start(): Boolean {
         if (running) return true
         return try {
