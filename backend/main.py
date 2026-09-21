@@ -1,6 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 import asyncio
+import http.client
 import re, json, socket, threading, hashlib, secrets
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -185,15 +186,32 @@ async def websocket_endpoint(websocket:WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket);await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
 
-def _forward_to_phone(phone_ip,phone_cookie,filename,data,content_type):
+def _forward_file_to_phone(phone_ip,phone_cookie,filename,file_obj,total_size,content_type):
     if not phone_ip or not phone_cookie:raise RuntimeError('Phone is not paired for file transfer')
-    url=f'http://{phone_ip}:18000/upload?source=web&filename={quote(filename,safe="")}'
-    req=UrlRequest(url,data=data,method='POST',headers={'Cookie':phone_cookie,'Content-Type':content_type or 'application/octet-stream','Content-Length':str(len(data)),'Cache-Control':'no-store'})
-    with _direct_opener.open(req,timeout=max(15,min(300,15+len(data)//(1024*1024)))) as response:
+    if total_size <= 0:raise RuntimeError('Empty file')
+    path=f'/upload?source=web&filename={quote(filename,safe="")}'
+    conn=http.client.HTTPConnection(phone_ip,18000,timeout=max(15,min(300,15+total_size//(1024*1024))))
+    try:
+        conn.putrequest('POST',path)
+        conn.putheader('Cookie',phone_cookie)
+        conn.putheader('Content-Type',content_type or 'application/octet-stream')
+        conn.putheader('Content-Length',str(total_size))
+        conn.putheader('Cache-Control','no-store')
+        conn.endheaders()
+        file_obj.seek(0)
+        remaining=total_size
+        while remaining:
+            chunk=file_obj.read(min(1024*1024,remaining))
+            if not chunk:raise RuntimeError('Unexpected end of uploaded file')
+            conn.send(chunk)
+            remaining-=len(chunk)
+        response=conn.getresponse()
         body=response.read()
         if not 200 <= response.status < 300:raise RuntimeError(f'Phone HTTP {response.status}')
         try:return json.loads(body.decode('utf-8'))
         except Exception:raise RuntimeError('Phone returned invalid upload response')
+    finally:
+        conn.close()
 
 @app.post('/upload')
 async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form(''),web_client_id:str=Form('')):
@@ -201,19 +219,20 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
     if source=='web':
         cid=safe_device_id(web_client_id);meta=get_web_meta(cid);targets=[safe_device_id(target_device_id)] if target_device_id else ([safe_device_id(meta.get('paired_device_id',''))] if meta.get('paired_device_id') else manager.devices());targets=[d for d in targets if d]
         if not targets:raise HTTPException(400,'No connected phone')
-        data=await file.read();original=safe_name(file.filename);transfer_id=uuid4().hex;results=[]
+        original=safe_name(file.filename);transfer_id=uuid4().hex;total_size=int(file.size or 0);results=[]
+        if total_size <= 0:raise HTTPException(400,'Empty file')
         for did in targets:
             if did not in manager.devices():raise HTTPException(409,f'Phone {did} is not connected')
             phone_ip=manager.ip_for_device(did)
             cookie=meta.get('phone_session_cookie','') if did==safe_device_id(meta.get('paired_device_id','')) else ''
             if not cookie:raise HTTPException(403,'Phone must be paired again before sending files')
-            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':0,'total':len(data),'percent':0})
+            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':0,'total':total_size,'percent':0})
             try:
-                phone_info=await asyncio.to_thread(_forward_to_phone,phone_ip,cookie,original,data,file.content_type or 'application/octet-stream')
+                phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,file.file,total_size,file.content_type or 'application/octet-stream')
             except Exception as exc:
                 raise HTTPException(502,f'Phone transfer failed: {exc}')
             phone_info['device_id']=did;phone_info['source']='received';phone_info['transfer_id']=transfer_id;phone_info['content_type']=file.content_type or 'application/octet-stream';phone_info['url']=f'http://{phone_ip}:18000{phone_info.get("url","")}'
-            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':len(data),'total':len(data),'percent':100})
+            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':total_size,'total':total_size,'percent':100})
             await manager.send_to_device(did,{'type':'file_uploaded',**phone_info})
             results.append(phone_info)
         entry=dict(results[0]);entry['targets']=[r['device_id'] for r in results];entry['source']='web';add_web_history(cid,'sent',entry);return entry
