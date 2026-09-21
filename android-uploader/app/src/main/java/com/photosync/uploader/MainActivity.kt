@@ -193,11 +193,28 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         connectionEnabled = true
         val normalized = url.trim().removeSuffix("/")
         prefs.edit().putString("server_url", normalized).apply()
-        serverUrlInput.setText(normalized)
         socket?.close(1000, "Embedded server selected")
         socket = null
-        serverStatus.text = "● Local Server: Selected"
-        status.text = "Using Android local server…"
+        serverStatus.text = "● Local Server: Starting…"
+        status.text = "Starting Android local server…"
+        Thread {
+            val ok = try {
+                localServer.isRunning() || localServer.start()
+            } catch (_: Throwable) {
+                false
+            }
+            runOnUiThread {
+                if (!started) return@runOnUiThread
+                if (ok && localServer.isRunning()) {
+                    serverUrlInput.setText(normalized)
+                    serverStatus.text = "● Local Server: Connected"
+                    status.text = "Android local server ready ✓"
+                } else {
+                    serverStatus.text = "● Local Server: Not running"
+                    status.text = "Android local server could not start"
+                }
+            }
+        }.start()
     }
 
     private fun applyThemeColor() {
