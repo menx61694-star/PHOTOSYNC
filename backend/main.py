@@ -201,7 +201,7 @@ def _forward_file_to_phone(phone_ip,phone_cookie,filename,file_obj,total_size,co
         file_obj.seek(0)
         remaining=total_size
         while remaining:
-            chunk=file_obj.read(min(1024*1024,remaining))
+            chunk=file_obj.read(min(4*1024*1024,remaining))
             if not chunk:raise RuntimeError('Unexpected end of uploaded file')
             conn.send(chunk)
             remaining-=len(chunk)
@@ -238,7 +238,7 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
         entry=dict(results[0]);entry['targets']=[r['device_id'] for r in results];entry['source']='web';add_web_history(cid,'sent',entry);return entry
     owner=request_owner_id(request,device_id);folder,_=device_dirs(owner);original=safe_name(file.filename);transfer_id=uuid4().hex;total=int(file.size or 0);received=0;last=-1;destination=folder/f'{transfer_id}__{source}__{owner}__{original}'
     with destination.open('wb') as output:
-        while chunk:=await file.read(1024*1024):
+        while chunk:=await file.read(4*1024*1024):
             output.write(chunk);received+=len(chunk)
             if total>0:
                 percent=int(received*100/total)
