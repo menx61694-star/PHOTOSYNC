@@ -398,14 +398,15 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
             runOnUiThread {
                 discoveryInProgress = false
                 if (!started || !connectionEnabled) return@runOnUiThread
-                if (foundUrl != null) {
+                val discoveredUrl = foundUrl
+                if (discoveredUrl != null) {
                     if (forLocalServer) {
-                        backendServerUrl = foundUrl!!
-                        prefs.edit().putString("backend_server_url", foundUrl).apply()
-                        reconnectSocket(foundUrl)
+                        backendServerUrl = discoveredUrl
+                        prefs.edit().putString("backend_server_url", discoveredUrl).apply()
+                        reconnectSocket(discoveredUrl)
                         status.text = "Local server ready; PC server connected ✓"
                     } else {
-                        saveAndConnect(foundUrl!!)
+                        saveAndConnect(discoveredUrl)
                         status.text = "Server found automatically ✓"
                     }
                 } else {
