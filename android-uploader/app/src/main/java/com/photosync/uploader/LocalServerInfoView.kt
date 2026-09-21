@@ -49,7 +49,7 @@ class LocalServerInfoView @JvmOverloads constructor(
             refreshPin.isEnabled = false
             serverExecutor.execute {
                 try { app.localServer.refreshPin() } catch (_: Throwable) { }
-                handler.post { if (attached) updateInfo() }
+                handler.post { if (attached) refreshInfoAsync() }
             }
         }
         val row = LinearLayout(context).apply {
