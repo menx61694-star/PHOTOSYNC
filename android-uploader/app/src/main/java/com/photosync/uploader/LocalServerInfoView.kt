@@ -1,6 +1,5 @@
 package com.photosync.uploader
 
-import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.os.Handler
@@ -8,7 +7,6 @@ import android.os.Looper
 import android.util.AttributeSet
 import android.view.Gravity
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -24,7 +22,6 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val serverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     @Volatile private var attached = false
     @Volatile private var startRequested = false
-    @Volatile private var discoveryTriggered = false
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -98,29 +95,6 @@ class LocalServerInfoView @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
-    private fun clearEmbeddedUrlFromTransferTarget(server: LocalServer) {
-        val activity = context as? Activity ?: return
-        val localUrl = server.url()?.removeSuffix("/") ?: return
-        val prefs = activity.getSharedPreferences("photosync", Context.MODE_PRIVATE)
-        val saved = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
-        if (saved != localUrl) return
-
-        // The embedded Android server is a receiver/browser endpoint, not the
-        // PC transfer target. Never let the app accidentally select itself as
-        // the destination for Send Files (that was the source of HTTP 401).
-        prefs.edit().remove("server_url").apply()
-        activity.findViewById<EditText>(R.id.serverUrlInput)?.setText("")
-
-        // MainActivity can run its initial connection logic just before or
-        // after this view's asynchronous server startup. Retry discovery on a
-        // short cooldown so a race cannot put the embedded :18000 URL back.
-        if (!discoveryTriggered) {
-            discoveryTriggered = true
-            activity.findViewById<Button>(R.id.findServerButton)?.performClick()
-            handler.postDelayed({ discoveryTriggered = false }, 4000)
-        }
-    }
-
     private fun updateInfo() {
         if (!attached) return
         val app = context.applicationContext as? PhotoSyncApplication ?: return
@@ -136,6 +110,5 @@ class LocalServerInfoView @JvmOverloads constructor(
         address.text = "Web: ${server.url() ?: "Waiting for network…"}"
         pin.text = "Pairing PIN: ${server.currentPin()}"
         refreshPin.isEnabled = true
-        clearEmbeddedUrlFromTransferTarget(server)
     }
 }
