@@ -226,7 +226,6 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         val name = safeName(query["filename"])
         val length = headers["content-length"]?.toLongOrNull() ?: return json("{\"detail\":\"Content-Length required\"}", "411 Length Required")
         if (length <= 0L) return json("{\"detail\":\"Empty file\"}", "400 Bad Request")
-        if (length > 500L * 1024L * 1024L) return json("{\"detail\":\"File too large\"}", "413 Payload Too Large")
         val dir = if (source == "app") uploads else downloads
         var target = File(dir, "${System.currentTimeMillis()}__$name"); var n = 1
         while (target.exists()) target = File(dir, "${System.currentTimeMillis()}__${n++}__$name")
