@@ -144,7 +144,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         }
     }
 
-    private data class Response(val status: String, val type: String, val body: String = "", val bytes: ByteArray? = null, val cookie: String? = null, val extra: String = "")
+    private data class Response(val status: String, val type: String, val body: String = "", val bytes: ByteArray? = null, val file: File? = null, val cookie: String? = null, val extra: String = "")
     private fun json(body: String, status: String = "200 OK") = Response(status, "application/json; charset=utf-8", body)
     private fun html(body: String) = Response("200 OK", "text/html; charset=utf-8", body)
 
@@ -203,7 +203,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         val target = dir.listFiles()?.firstOrNull { it.name == name } ?: return Response("404 Not Found", "text/plain", "Not found")
         val ext = name.substringAfterLast('.', "").lowercase()
         val type = when (ext) { "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; "mp4" -> "video/mp4"; "webm" -> "video/webm"; "mov" -> "video/quicktime"; "pdf" -> "application/pdf"; "txt" -> "text/plain"; else -> "application/octet-stream" }
-        return Response("200 OK", type, bytes = target.readBytes(), extra = "Content-Disposition: ${if (download) "attachment" else "inline"}; filename=\"${name.replace("\"", "_")}\"\r\n")
+        return Response("200 OK", type, file = target, extra = "Content-Disposition: ${if (download) "attachment" else "inline"}; filename=\"${name.replace("\"", "_")}\"\r\n")
     }
 
     private fun upload(input: InputStream, headers: Map<String, String>, query: Map<String, String>): Response {
@@ -216,7 +216,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         var target = File(dir, "${System.currentTimeMillis()}__$name"); var n = 1
         while (target.exists()) target = File(dir, "${System.currentTimeMillis()}__${n++}__$name")
         input.use { src -> target.outputStream().use { out ->
-            val buffer = ByteArray(64 * 1024); var total = 0L
+            val buffer = ByteArray(256 * 1024); var total = 0L
             while (total < length) { val read = src.read(buffer, 0, minOf(buffer.size.toLong(), length - total).toInt()); if (read <= 0) break; out.write(buffer, 0, read); total += read }
         }}
         return json(fileJson(target, source).toString())
