@@ -240,15 +240,18 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         var target = File(dir, "${System.currentTimeMillis()}__$name"); var n = 1
         while (target.exists()) target = File(dir, "${System.currentTimeMillis()}__${n++}__$name")
         var total = 0L
-        input.use { src -> target.outputStream().use { out ->
+        // Do not close the request input here. Closing Socket.getInputStream()
+        // also closes the socket, which would prevent the HTTP response from
+        // reaching the uploader after a successful upload.
+        target.outputStream().use { out ->
             val buffer = ByteArray(256 * 1024)
             while (total < length) {
-                val read = src.read(buffer, 0, minOf(buffer.size.toLong(), length - total).toInt())
+                val read = input.read(buffer, 0, minOf(buffer.size.toLong(), length - total).toInt())
                 if (read <= 0) break
                 out.write(buffer, 0, read)
                 total += read
             }
-        }}
+        }
         if (total != length) {
             try { target.delete() } catch (_: Exception) {}
             return json("{\"detail\":\"Incomplete upload\"}", "400 Bad Request")
