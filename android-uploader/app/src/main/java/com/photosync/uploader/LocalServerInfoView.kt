@@ -9,6 +9,8 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class LocalServerInfoView @JvmOverloads constructor(
     context: Context,
@@ -19,7 +21,7 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val address = TextView(context)
     private val pin = TextView(context)
     private val refreshPin = Button(context)
-    private val serverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    @Volatile private var serverExecutor: ExecutorService? = null
     @Volatile private var attached = false
     @Volatile private var startRequested = false
 
@@ -47,7 +49,7 @@ class LocalServerInfoView @JvmOverloads constructor(
             val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
             if (!app.localServer.isRunning()) return@setOnClickListener
             refreshPin.isEnabled = false
-            serverExecutor.execute {
+            serverExecutor?.execute {
                 try { app.localServer.refreshPin() } catch (_: Throwable) { }
                 handler.post { if (attached) refreshInfoAsync() }
             }
@@ -68,10 +70,11 @@ class LocalServerInfoView @JvmOverloads constructor(
         attached = true
         val app = context.applicationContext as? PhotoSyncApplication
         if (app != null && !startRequested) {
+            if (serverExecutor == null || serverExecutor?.isShutdown == true) serverExecutor = Executors.newSingleThreadExecutor()
             startRequested = true
             status.text = "● Local Server: Starting…"
             refreshPin.isEnabled = false
-            serverExecutor.execute {
+            serverExecutor?.execute {
                 val started = try {
                     if (app.localServer.isRunning()) true else app.localServer.start()
                 } catch (_: Throwable) { false }
@@ -94,13 +97,15 @@ class LocalServerInfoView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         attached = false
         handler.removeCallbacks(refresh)
+        serverExecutor?.shutdownNow()
+        serverExecutor = null
         super.onDetachedFromWindow()
     }
 
     private fun refreshInfoAsync() {
         if (!attached) return
         val app = context.applicationContext as? PhotoSyncApplication ?: return
-        serverExecutor.execute {
+        serverExecutor?.execute {
             val state = try {
                 val server = app.localServer
                 if (!server.isRunning()) null
