@@ -46,7 +46,12 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
-    private val client = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.MINUTES)
+        .writeTimeout(5, TimeUnit.MINUTES)
+        .callTimeout(10, TimeUnit.MINUTES)
+        .build()
     private lateinit var status: TextView
     private lateinit var serverStatus: TextView
     private lateinit var serverUrlInput: EditText
@@ -452,7 +457,12 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
     }
 
     private fun upload(uri: Uri) {
-        val serverUrl = currentServerUrl()
+        // App -> PC transfer always uses the external backend. The Android
+        // embedded server may remain selected as the browser/local-server URL.
+        val serverUrl = backendServerUrl.ifBlank {
+            val current = currentServerUrl()
+            if (isLocalServerUrl(current)) "" else current
+        }
         if (serverUrl.isBlank() || isLocalServerUrl(serverUrl)) {
             runOnUiThread { status.text = "Connect to the external PC server first" }
             return
@@ -669,13 +679,20 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
             var written = 0L
             resolver.openInputStream(uri).use { input ->
                 requireNotNull(input) { "Unable to open file" }
-                val buffer = ByteArray(64 * 1024)
+                val buffer = ByteArray(256 * 1024)
+                var nextProgress = 0L
                 while (true) {
                     val read = input.read(buffer)
                     if (read <= 0) break
                     sink.write(buffer, 0, read)
                     written += read
-                    onProgress(written, total)
+                    if (written >= nextProgress || (total > 0L && written >= total)) {
+                        onProgress(written, total)
+                        nextProgress = written + 1024L * 1024L
+                    }
+                }
+                if (total >= 0L && written != total) {
+                    throw java.io.EOFException("File changed or ended early during upload ($written/$total bytes)")
                 }
             }
         }
