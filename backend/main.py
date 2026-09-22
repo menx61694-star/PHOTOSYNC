@@ -223,8 +223,6 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
     total = int(request.headers.get('content-length') or 0)
     if total <= 0:
         raise HTTPException(411, 'Content-Length required')
-    if total > 2 * 1024 * 1024 * 1024:
-        raise HTTPException(413, 'File too large')
 
     destination = folder / f'{transfer_id}__{source}__{owner}__{original}'
     received = 0
