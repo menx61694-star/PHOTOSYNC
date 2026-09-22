@@ -230,10 +230,20 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         val dir = if (source == "app") uploads else downloads
         var target = File(dir, "${System.currentTimeMillis()}__$name"); var n = 1
         while (target.exists()) target = File(dir, "${System.currentTimeMillis()}__${n++}__$name")
+        var total = 0L
         input.use { src -> target.outputStream().use { out ->
-            val buffer = ByteArray(256 * 1024); var total = 0L
-            while (total < length) { val read = src.read(buffer, 0, minOf(buffer.size.toLong(), length - total).toInt()); if (read <= 0) break; out.write(buffer, 0, read); total += read }
+            val buffer = ByteArray(256 * 1024)
+            while (total < length) {
+                val read = src.read(buffer, 0, minOf(buffer.size.toLong(), length - total).toInt())
+                if (read <= 0) break
+                out.write(buffer, 0, read)
+                total += read
+            }
         }}
+        if (total != length) {
+            try { target.delete() } catch (_: Exception) {}
+            return json("{\"detail\":\"Incomplete upload\"}", "400 Bad Request")
+        }
         return json(fileJson(target, source).toString())
     }
 
