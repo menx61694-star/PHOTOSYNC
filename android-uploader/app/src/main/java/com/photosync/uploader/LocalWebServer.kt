@@ -14,12 +14,13 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class LocalWebServer(private val context: Context, private val port: Int) {
     @Volatile private var running = false
     private var serverSocket: ServerSocket? = null
-    private val executor = Executors.newCachedThreadPool()
+     @Volatile private var executor: ExecutorService? = null
     private val random = SecureRandom()
     @Volatile private var pin = generatePin()
     private val sessions = ConcurrentHashMap<String, Long>()
@@ -37,11 +38,14 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         return try {
             val s = ServerSocket()
             s.reuseAddress = true
+            s.receiveBufferSize = 1024 * 1024
             s.bind(java.net.InetSocketAddress(port), 50)
             serverSocket = s
             pin = generatePin()
             sessions.clear(); attempts.clear(); running = true
-            executor.execute { acceptLoop() }
+            executor?.shutdownNow()
+            executor = Executors.newCachedThreadPool()
+            executor?.execute { acceptLoop() }
             true
         } catch (_: Exception) {
             running = false
@@ -51,10 +55,14 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         }
     }
 
+    @Synchronized
     fun stop() {
-        running = false; sessions.clear(); attempts.clear()
+        running = false
+        sessions.clear(); attempts.clear()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
+        executor?.shutdownNow()
+        executor = null
     }
 
     fun refreshPin(): String { pin = generatePin(); sessions.clear(); attempts.clear(); return pin }
@@ -97,7 +105,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
 
     private fun acceptLoop() {
         while (running) {
-            try { serverSocket?.accept()?.let { executor.execute { handle(it) } } }
+            try { serverSocket?.accept()?.let { socket -> executor?.execute { handle(socket) } } }
             catch (_: Exception) { if (!running) break }
         }
     }
@@ -105,7 +113,9 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     private fun handle(socket: Socket) {
         socket.use {
             try {
-                it.soTimeout = 15_000
+                it.soTimeout = 5 * 60 * 1000
+                it.receiveBufferSize = 1024 * 1024
+                it.sendBufferSize = 1024 * 1024
                 val input = BufferedInputStream(it.getInputStream(), 64 * 1024)
                 val request = readLine(input) ?: return
                 val headers = mutableMapOf<String, String>()
