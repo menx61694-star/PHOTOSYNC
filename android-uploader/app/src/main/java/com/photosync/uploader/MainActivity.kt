@@ -184,8 +184,9 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         val saved = currentServerUrl()
         if (saved.isNotBlank() && isLocalServerUrl(saved)) {
             selectEmbeddedServer(saved)
+            refreshLists()
             if (backendServerUrl.isNotBlank()) reconnectSocket(backendServerUrl)
-            else discoverServer(forLocalServer = true)
+            else status.text = "Android local server connected ✓"
             return
         }
         if (saved.isNotBlank()) {
@@ -240,8 +241,9 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
             connectionEnabled = true
             if (isLocalServerUrl(normalized)) {
                 selectEmbeddedServer(normalized)
+                refreshLists()
                 if (backendServerUrl.isNotBlank()) reconnectSocket(backendServerUrl)
-                else discoverServer(forLocalServer = true)
+                else status.text = "Android local server connected ✓"
                 return
             }
             backendServerUrl = normalized
