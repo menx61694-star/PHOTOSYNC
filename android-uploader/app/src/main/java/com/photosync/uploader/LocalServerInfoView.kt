@@ -49,7 +49,7 @@ class LocalServerInfoView @JvmOverloads constructor(
             val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
             if (!app.localServer.isRunning()) return@setOnClickListener
             refreshPin.isEnabled = false
-            serverExecutor?.execute {
+            executeServerTask {
                 try { app.localServer.refreshPin() } catch (_: Throwable) { }
                 handler.post { if (attached) refreshInfoAsync() }
             }
@@ -74,7 +74,7 @@ class LocalServerInfoView @JvmOverloads constructor(
             startRequested = true
             status.text = "● Local Server: Starting…"
             refreshPin.isEnabled = false
-            serverExecutor?.execute {
+            executeServerTask {
                 val started = try {
                     if (app.localServer.isRunning()) true else app.localServer.start()
                 } catch (_: Throwable) { false }
@@ -105,7 +105,7 @@ class LocalServerInfoView @JvmOverloads constructor(
     private fun refreshInfoAsync() {
         if (!attached) return
         val app = context.applicationContext as? PhotoSyncApplication ?: return
-        serverExecutor?.execute {
+        executeServerTask {
             val state = try {
                 val server = app.localServer
                 if (!server.isRunning()) null
@@ -125,6 +125,18 @@ class LocalServerInfoView @JvmOverloads constructor(
                     refreshPin.isEnabled = true
                 }
             }
+        }
+    }
+
+    private fun executeServerTask(task: () -> Unit) {
+        if (!attached) return
+        val executor = serverExecutor
+        if (executor == null || executor.isShutdown || executor.isTerminated) return
+        try {
+            executor.execute(task)
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // The view may have detached/re-attached while a refresh was queued.
+            // Never let executor lifecycle races crash the Activity.
         }
     }
 }
