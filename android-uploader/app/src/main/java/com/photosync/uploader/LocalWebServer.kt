@@ -49,10 +49,12 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             executor = Executors.newCachedThreadPool()
             executor?.execute { acceptLoop() }
             true
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             running = false
-            try { serverSocket?.close() } catch (_: Exception) {}
+            try { serverSocket?.close() } catch (_: Throwable) {}
             serverSocket = null
+            try { executor?.shutdownNow() } catch (_: Throwable) {}
+            executor = null
             false
         }
     }
