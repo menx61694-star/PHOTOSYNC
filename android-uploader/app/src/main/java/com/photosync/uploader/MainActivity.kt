@@ -45,7 +45,7 @@ import java.net.NetworkInterface
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
+class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, LocalServerInfoView.Listener {
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.MINUTES)
@@ -109,6 +109,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<Button>(R.id.selectButton).setOnClickListener { picker.launch("*/*") }
         findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
+        findViewById<LocalServerInfoView>(R.id.localServerInfo).setListener(this)
         findViewById<LinearLayout>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
         findViewById<LinearLayout>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
     }
@@ -118,7 +119,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         started = true
         connectionEnabled = true
         applyThemeColor()
-        connectSavedOrDiscover()
+        // Server activation is now explicit: the user chooses Embedded or PC server.
         handler.removeCallbacks(receiveRefreshRunnable)
         handler.postDelayed(receiveRefreshRunnable, 3000)
     }
@@ -132,9 +133,55 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
         super.onStop()
     }
 
+    override fun onEmbeddedStartRequested() {
+        try {
+            connectionEnabled = true
+            socket?.close(1000, "Embedded server selected")
+            socket = null
+            backendServerUrl = ""
+            prefs.edit().remove("backend_server_url").apply()
+            val appServer = localServer
+            Thread {
+                val startedOk = appServer.start()
+                val url = appServer.url()
+                runOnUiThread {
+                    if (startedOk && !url.isNullOrBlank()) {
+                        prefs.edit().putString("server_url", url).apply()
+                        serverUrlInput.setText(url)
+                        serverStatus.text = "● Local Server: Running"
+                        status.text = "Embedded server active ✓"
+                        refreshLists()
+                    } else {
+                        serverStatus.text = "● Local Server: Not running"
+                        status.text = "Unable to start embedded server"
+                    }
+                }
+            }.start()
+        } catch (t: Throwable) {
+            serverStatus.text = "● Local Server: Not running"
+            status.text = "Unable to start embedded server"
+        }
+    }
+
+    override fun onEmbeddedStopRequested() {
+        try {
+            socket?.close(1000, "Embedded server stopped")
+            socket = null
+            localServer.stop()
+            prefs.edit().remove("server_url").remove("backend_server_url").apply()
+            backendServerUrl = ""
+            serverUrlInput.setText("")
+            serverStatus.text = "● Local Server: Stopped"
+            status.text = "Embedded server stopped"
+        } catch (_: Throwable) {
+            serverStatus.text = "● Local Server: Stopped"
+        }
+    }
+
     override fun onConnectRequested() {
         try {
             connectionEnabled = true
+            localServer.stop()
             val url = serverUrlInput.text?.toString()?.trim()?.removeSuffix("/") ?: ""
             if (url.isBlank()) {
                 discoverServer()
@@ -151,6 +198,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener {
 
     override fun onDisconnectRequested() {
         connectionEnabled = false
+        try { localServer.stop() } catch (_: Throwable) { }
         socket?.close(1000, "User disconnected")
         socket = null
         prefs.edit().remove("server_url").remove("backend_server_url").apply()
