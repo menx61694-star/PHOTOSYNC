@@ -575,7 +575,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                             if (data.optString("service") == "PHOTOSYNC") {
                                 foundUrl = "http://${response.address.hostAddress}:${data.optInt("port", 8000)}"
                                 val discoveredPin = data.optString("pairing_pin", "")
-                                if (discoveredPin.length == 6 && discoveredPin.all(Char::isDigit)) serverPinInput.post { serverPinInput.setText(discoveredPin) }
+                                if (discoveredPin.length == 6 && discoveredPin.all(Char::isDigit)) serverPinInput.setText(discoveredPin)
                                 break
                             }
                         } catch (_: java.net.SocketTimeoutException) { }
