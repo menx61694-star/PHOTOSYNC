@@ -44,7 +44,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             s.bind(java.net.InetSocketAddress(port), 50)
             serverSocket = s
             pin = generatePin()
-            sessions.clear(); webClients.clear(); attempts.clear(); webClients.clear(); attempts.clear(); running = true
+            sessions.clear(); webClients.clear(); attempts.clear(); running = true
             executor?.shutdownNow()
             executor = Executors.newCachedThreadPool()
             executor?.execute { acceptLoop() }
@@ -60,14 +60,14 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     @Synchronized
     fun stop() {
         running = false
-        sessions.clear(); attempts.clear()
+        sessions.clear(); webClients.clear(); attempts.clear()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         executor?.shutdownNow()
         executor = null
     }
 
-    fun refreshPin(): String { pin = generatePin(); sessions.clear(); attempts.clear(); return pin }
+    fun refreshPin(): String { pin = generatePin(); sessions.clear(); webClients.clear(); attempts.clear(); return pin }
     fun isRunning() = running && serverSocket?.isClosed == false
     fun currentPin() = pin
     fun isAuthorized(token: String?) = token != null && sessions[token]?.let { System.currentTimeMillis() < it } == true
