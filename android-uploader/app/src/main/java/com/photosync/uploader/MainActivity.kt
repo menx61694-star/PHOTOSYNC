@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
     private lateinit var status: TextView
     private lateinit var serverStatus: TextView
     private lateinit var serverUrlInput: EditText
+    private lateinit var serverPinInput: EditText
     private lateinit var homeServerAddress: TextView
     private lateinit var sentFilesContainer: LinearLayout
     private lateinit var receivedFilesContainer: LinearLayout
@@ -69,6 +70,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
     private var started = false
     private var connectionEnabled = true
     private var discoveryInProgress = false
+    @Volatile private var embeddedStarting = false
     private val activeProgressRows = mutableMapOf<String, View>()
     private val activeReceiveTransfers = mutableMapOf<String, String>()
     private val receiveRefreshRunnable = object : Runnable {
@@ -89,6 +91,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         status = findViewById(R.id.statusText)
         serverStatus = findViewById(R.id.serverStatusText)
         serverUrlInput = findViewById(R.id.serverUrlInput)
+        serverPinInput = findViewById(R.id.serverPinInput)
         sentFilesContainer = findViewById(R.id.sentFilesContainer)
         receivedFilesContainer = findViewById(R.id.receivedFilesContainer)
         mainScroll = findViewById(R.id.mainScroll)
@@ -96,17 +99,19 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
 
         val savedServer = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
         backendServerUrl = prefs.getString("backend_server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        serverPinInput.setText(prefs.getString("server_pin", "") ?: "")
         if (savedServer.isNotBlank() && !isLocalServerUrl(savedServer)) backendServerUrl = savedServer
         serverUrlInput.setText(savedServer)
         applyThemeColor()
 
         findViewById<Button>(R.id.saveServerButton).setOnClickListener {
             val url = serverUrlInput.text.toString().trim().removeSuffix("/")
+            val pin = serverPinInput.text.toString().trim()
             if (url.isBlank()) {
                 status.text = "Enter a server URL or use Find Server"
                 return@setOnClickListener
             }
-            saveAndConnect(url)
+            saveAndConnect(url, pin)
         }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<View>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
@@ -247,10 +252,11 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
     override fun onEmbeddedStartRequested() {
         try {
             connectionEnabled = true
+            embeddedStarting = true
             socket?.close(1000, "Embedded server selected")
             socket = null
             backendServerUrl = ""
-            prefs.edit().remove("backend_server_url").apply()
+            prefs.edit().remove("backend_server_url").remove("server_pin").apply()
             val appServer = localServer
             Thread {
                 val startedOk = appServer.start()
@@ -261,10 +267,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                         serverUrlInput.setText(url)
                         serverStatus.text = "Embedded server connected"
                         status.text = "Embedded server active ✓"
+                        embeddedStarting = false
                         refreshHomeServerSummary()
-                        handler.postDelayed({
-                            if (started && localServer.isRunning()) refreshLists()
-                        }, 500)
                     } else {
                         serverStatus.text = "● Local Server: Not running"
                         status.text = "Unable to start embedded server"
@@ -284,7 +288,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
             socket?.close(1000, "Embedded server stopped")
             socket = null
             localServer.stop()
-            prefs.edit().remove("server_url").remove("backend_server_url").apply()
+            prefs.edit().remove("server_url").remove("backend_server_url").remove("server_pin").apply()
             backendServerUrl = ""
             serverUrlInput.setText("")
             serverStatus.text = "No server selected"
@@ -397,7 +401,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         } catch (_: Exception) { }
     }
 
-    private fun saveAndConnect(url: String) {
+    private fun saveAndConnect(url: String, pairingPin: String = serverPinInput.text.toString().trim()) {
         try {
             val normalized = url.trim().removeSuffix("/")
             if (normalized.isBlank()) return
@@ -409,9 +413,15 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                 return
             }
             backendServerUrl = normalized
+            if (pairingPin.length != 6 || !pairingPin.all(Char::isDigit)) {
+                status.text = "Enter the 6-digit PC server pairing PIN"
+                serverPinInput.requestFocus()
+                return
+            }
             prefs.edit()
                 .putString("server_url", normalized)
                 .putString("backend_server_url", normalized)
+                .putString("server_pin", pairingPin)
                 .apply()
             serverUrlInput.setText(normalized)
             status.text = "Connecting…"
@@ -434,7 +444,10 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
     }
 
     private fun requestBuilder(url: String): Request.Builder =
-        Request.Builder().url(url).header("X-PhotoSync-Device-ID", deviceIdentity.id)
+        Request.Builder().url(url).header("X-PhotoSync-Device-ID", deviceIdentity.id).apply {
+            val pin = serverPinInput.text.toString().trim()
+            if (pin.isNotBlank() && !isLocalServerUrl(url)) header("X-PhotoSync-Server-PIN", pin)
+        }
 
     private fun reconnectSocket(serverUrl: String = backendServerUrl.ifBlank { currentServerUrl() }) {
         socket?.close(1000, "Reconnect")
@@ -514,8 +527,10 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
     }
 
     private fun scheduleReconnect() {
-        if (!started || !connectionEnabled) return
-        handler.postDelayed({ if (started && connectionEnabled && currentServerUrl().isNotBlank()) connectSocket() }, 2000)
+        if (!started || !connectionEnabled || embeddedStarting) return
+        handler.postDelayed({
+            if (started && connectionEnabled && !embeddedStarting && backendServerUrl.isNotBlank()) connectSocket(backendServerUrl)
+        }, 2000)
     }
 
     private fun localBroadcastAddresses(): List<InetAddress> {
@@ -559,6 +574,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                             val data = JSONObject(String(response.data, 0, response.length, Charsets.UTF_8))
                             if (data.optString("service") == "PHOTOSYNC") {
                                 foundUrl = "http://${response.address.hostAddress}:${data.optInt("port", 8000)}"
+                                val discoveredPin = data.optString("pairing_pin", "")
+                                if (discoveredPin.length == 6 && discoveredPin.all(Char::isDigit)) serverPinInput.post { serverPinInput.setText(discoveredPin) }
                                 break
                             }
                         } catch (_: java.net.SocketTimeoutException) { }
@@ -576,7 +593,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                         reconnectSocket(discoveredUrl)
                         status.text = "Local server ready; PC server connected ✓"
                     } else {
-                        saveAndConnect(discoveredUrl)
+                        saveAndConnect(discoveredUrl, serverPinInput.text.toString().trim())
                         status.text = "Server found automatically ✓"
                     }
                 } else {
