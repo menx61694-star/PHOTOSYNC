@@ -23,6 +23,8 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val refreshPin = Button(context)
     private val startServer = Button(context)
     private val stopServer = Button(context)
+    private val webClientsTitle = TextView(context)
+    private val webClientsBox = LinearLayout(context)
     @Volatile private var serverExecutor: ExecutorService? = null
     @Volatile private var attached = false
     @Volatile private var startRequested = false
@@ -56,6 +58,11 @@ class LocalServerInfoView @JvmOverloads constructor(
         refreshPin.text = "Refresh PIN"
         startServer.text = "Start Embedded"
         stopServer.text = "Stop Embedded"
+        webClientsTitle.text = "🌐 Connected Web Clients"
+        webClientsTitle.setTextColor(Color.WHITE)
+        webClientsTitle.textSize = 15f
+        webClientsBox.orientation = VERTICAL
+        webClientsBox.setPadding(0, 6, 0, 0)
         startServer.setOnClickListener { listener?.onEmbeddedStartRequested() }
         stopServer.setOnClickListener { listener?.onEmbeddedStopRequested() }
         refreshPin.setOnClickListener {
@@ -99,6 +106,8 @@ class LocalServerInfoView @JvmOverloads constructor(
         addView(status)
         addView(address)
         addView(serverButtons)
+        addView(webClientsTitle)
+        addView(webClientsBox)
         addView(row)
     }
 
@@ -140,6 +149,7 @@ class LocalServerInfoView @JvmOverloads constructor(
                     address.text = "Web address: unavailable"
                     pin.text = "PIN: —"
                     refreshPin.isEnabled = false
+                    webClientsBox.removeAllViews()
                     startServer.isEnabled = true
                     stopServer.isEnabled = false
                 } else {
@@ -147,6 +157,17 @@ class LocalServerInfoView @JvmOverloads constructor(
                     address.text = "Web: ${state.first ?: "Waiting for network…"}"
                     pin.text = "Pairing PIN: ${state.second}"
                     refreshPin.isEnabled = true
+                    webClientsBox.removeAllViews()
+                    val clients = app.localServer.webClients()
+                    if (clients.isEmpty()) {
+                        webClientsBox.addView(TextView(context).apply { text = "No web clients connected"; setTextColor(Color.rgb(185,199,217)); textSize = 13f })
+                    } else clients.forEach { client ->
+                        val rowClient = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                        val label = TextView(context).apply { text = "${client.ip} • ${client.id}"; setTextColor(Color.rgb(185,199,217)); textSize = 13f }
+                        val disconnect = Button(context).apply { text = "Disconnect"; isAllCaps = false; setOnClickListener { app.localServer.disconnectWebClient(client.id); refreshInfoAsync() } }
+                        rowClient.addView(label, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)); rowClient.addView(disconnect)
+                        webClientsBox.addView(rowClient)
+                    }
                     startServer.isEnabled = false
                     stopServer.isEnabled = true
                 }
