@@ -21,9 +21,18 @@ class LocalServerInfoView @JvmOverloads constructor(
     private val address = TextView(context)
     private val pin = TextView(context)
     private val refreshPin = Button(context)
+    private val startServer = Button(context)
+    private val stopServer = Button(context)
     @Volatile private var serverExecutor: ExecutorService? = null
     @Volatile private var attached = false
     @Volatile private var startRequested = false
+
+    interface Listener {
+        fun onEmbeddedStartRequested()
+        fun onEmbeddedStopRequested()
+    }
+    private var listener: Listener? = null
+    fun setListener(value: Listener?) { listener = value }
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -45,6 +54,10 @@ class LocalServerInfoView @JvmOverloads constructor(
         pin.textSize = 22f
         pin.setPadding(0, 8, 0, 0)
         refreshPin.text = "Refresh PIN"
+        startServer.text = "Start Embedded"
+        stopServer.text = "Stop Embedded"
+        startServer.setOnClickListener { listener?.onEmbeddedStartRequested() }
+        stopServer.setOnClickListener { listener?.onEmbeddedStopRequested() }
         refreshPin.setOnClickListener {
             val app = context.applicationContext as? PhotoSyncApplication ?: return@setOnClickListener
             if (!app.localServer.isRunning()) return@setOnClickListener
@@ -60,8 +73,15 @@ class LocalServerInfoView @JvmOverloads constructor(
             addView(pin, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(refreshPin, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         }
+        val serverButtons = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(startServer, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            addView(stopServer, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = 8 }
+        }
         addView(status)
         addView(address)
+        addView(serverButtons)
         addView(row)
     }
 
@@ -69,29 +89,14 @@ class LocalServerInfoView @JvmOverloads constructor(
         super.onAttachedToWindow()
         attached = true
         val app = context.applicationContext as? PhotoSyncApplication
-        if (app != null && !startRequested) {
+        if (app != null) {
             if (serverExecutor == null || serverExecutor?.isShutdown == true) serverExecutor = Executors.newSingleThreadExecutor()
-            startRequested = true
-            status.text = "● Local Server: Starting…"
-            refreshPin.isEnabled = false
-            executeServerTask {
-                val started = try {
-                    if (app.localServer.isRunning()) true else app.localServer.start()
-                } catch (_: Throwable) { false }
-                handler.post {
-                    startRequested = false
-                    if (!attached) return@post
-                    if (started) refreshInfoAsync() else {
-                        status.text = "● Local Server: Not running"
-                        address.text = "Web address: unavailable"
-                        pin.text = "PIN: —"
-                        refreshPin.isEnabled = false
-                    }
-                }
-            }
+            refreshInfoAsync()
         }
         handler.removeCallbacks(refresh)
         handler.post(refresh)
+        startServer.isEnabled = true
+        stopServer.isEnabled = true
     }
 
     override fun onDetachedFromWindow() {
@@ -118,11 +123,15 @@ class LocalServerInfoView @JvmOverloads constructor(
                     address.text = "Web address: unavailable"
                     pin.text = "PIN: —"
                     refreshPin.isEnabled = false
+                    startServer.isEnabled = true
+                    stopServer.isEnabled = false
                 } else {
                     status.text = "● Local Server: Running"
                     address.text = "Web: ${state.first ?: "Waiting for network…"}"
                     pin.text = "Pairing PIN: ${state.second}"
                     refreshPin.isEnabled = true
+                    startServer.isEnabled = false
+                    stopServer.isEnabled = true
                 }
             }
         }
