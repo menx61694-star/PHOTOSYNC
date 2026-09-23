@@ -1,580 +1,169 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/mainScroll"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@drawable/ps_page"
-    android:fillViewport="true"
-    android:clipToPadding="false">
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:paddingStart="18dp"
-        android:paddingEnd="18dp"
-        android:paddingTop="18dp"
-        android:paddingBottom="104dp">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:paddingTop="4dp"
-            android:paddingBottom="16dp">
-
-            <TextView
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:gravity="center"
-                android:text="◉"
-                android:textColor="#8C7BFF"
-                android:textSize="32sp"
-                android:textStyle="bold" />
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:paddingStart="10dp">
-
-                <TextView
-                    android:id="@+id/statusText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="PhotoSync"
-                    android:textColor="#F7F8FF"
-                    android:textSize="29sp"
-                    android:textStyle="bold"
-                    android:letterSpacing="0.01" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Share anything. Anywhere."
-                    android:textColor="#9EA8BD"
-                    android:textSize="12sp" />
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="#F5F8FF">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="18dp" android:background="@drawable/ps_top_header">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+            <TextView android:layout_width="54dp" android:layout_height="54dp" android:gravity="center"
+                android:text="◉" android:textColor="#54A5FF" android:textSize="36sp" android:textStyle="bold"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:orientation="vertical" android:paddingStart="8dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="PhotoSync" android:textColor="#FFFFFF" android:textSize="29sp" android:textStyle="bold"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Share Anything. Anywhere." android:textColor="#B9C8E5" android:textSize="13sp"/>
             </LinearLayout>
-
-            <com.photosync.uploader.MenuButton
-                android:id="@+id/menuButton"
-                android:layout_width="46dp"
-                android:layout_height="46dp"
-                android:background="@drawable/ps_icon_button"
-                android:contentDescription="Settings"
-                android:padding="11dp"
-                android:src="@android:drawable/ic_menu_manage"
-                android:tint="#EDEBFF" />
+            <com.photosync.uploader.MenuButton android:id="@+id/menuButton" android:layout_width="48dp" android:layout_height="48dp"
+                android:background="@drawable/ps_menu_light" android:contentDescription="Settings"
+                android:padding="12dp" android:src="@android:drawable/ic_menu_manage" android:tint="#243A68"/>
         </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/ps_status"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:layout_width="14dp"
-                    android:layout_height="14dp"
-                    android:layout_marginEnd="10dp"
-                    android:background="@drawable/ps_dot"
-                    android:text="" />
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Connected"
-                        android:textColor="#F5F7FF"
-                        android:textSize="17sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/serverStatusText"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="● Server: Searching LAN…"
-                        android:textColor="#AAB4C8"
-                        android:textSize="12sp" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Wi‑Fi"
-                    android:textColor="#8E9BFF"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/ps_ip"
-                android:paddingStart="12dp"
-                android:paddingTop="9dp"
-                android:paddingEnd="12dp"
-                android:paddingBottom="9dp"
-                android:text="Local network • No cloud required"
-                android:textColor="#B7C0D3"
-                android:textSize="12sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp">
-
-                <Button
-                    android:id="@+id/findServerButton"
-                    android:layout_width="0dp"
-                    android:layout_height="46dp"
-                    android:layout_marginEnd="5dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/ps_secondary_button"
-                    android:text="Find Server"
-                    android:textAllCaps="false"
-                    android:textColor="#EDEBFF"
-                    android:textSize="13sp" />
-
-                <Button
-                    android:id="@+id/saveServerButton"
-                    android:layout_width="0dp"
-                    android:layout_height="46dp"
-                    android:layout_marginStart="5dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/ps_secondary_button"
-                    android:text="Save Server"
-                    android:textAllCaps="false"
-                    android:textColor="#EDEBFF"
-                    android:textSize="13sp" />
-            </LinearLayout>
-
-            <EditText
-                android:id="@+id/serverUrlInput"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/ps_input"
-                android:hint="Manual server URL"
-                android:inputType="textUri"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:singleLine="true"
-                android:textColor="#F5F7FF"
-                android:textColorHint="#707B91"
-                android:textSize="13sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            android:background="@drawable/ps_hero"
-            android:orientation="vertical"
-            android:padding="20dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="TRANSFER FILES INSTANTLY"
-                android:textColor="#AEB6FF"
-                android:textSize="10sp"
-                android:textStyle="bold"
-                android:letterSpacing="0.14" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="7dp"
-                android:text="Fast. Private.&#10;No internet needed."
-                android:textColor="#FFFFFF"
-                android:textSize="25sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="7dp"
-                android:text="Send photos, videos and documents directly over your local network."
-                android:textColor="#C4CCE0"
-                android:textSize="12sp" />
-
-            <Button
-                android:id="@+id/selectButton"
-                android:layout_width="match_parent"
-                android:layout_height="54dp"
-                android:layout_marginTop="16dp"
-                android:background="@drawable/ps_primary_button"
-                android:text="Send Files  ›"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="22dp"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Quick Actions"
-                android:textColor="#F2F4FF"
-                android:textSize="21sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="4 tools"
-                android:textColor="#7F8CFF"
-                android:textSize="12sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="horizontal">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="126dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/ps_action_blue"
-                android:gravity="center_vertical"
-                android:orientation="vertical"
-                android:padding="15dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="↗"
-                    android:textColor="#AEB7FF"
-                    android:textSize="26sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="7dp"
-                    android:text="Send Files"
-                    android:textColor="#F6F7FF"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Photos • Docs • More"
-                    android:textColor="#9CA8BF"
-                    android:textSize="10sp" />
-            </LinearLayout>
-
-            <com.photosync.uploader.PeerModeButton
-                android:layout_width="0dp"
-                android:layout_height="126dp"
-                android:layout_marginStart="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/ps_action_purple"
-                android:gravity="center_vertical"
-                android:padding="15dp"
-                android:text="⇄&#10;P2P Transfer&#10;Phone to Phone"
-                android:textAllCaps="false"
-                android:textColor="#F6F2FF"
-                android:textSize="15sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="horizontal">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="112dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/ps_action_teal"
-                android:gravity="center_vertical"
-                android:orientation="vertical"
-                android:padding="15dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="☷"
-                    android:textColor="#86E9D2"
-                    android:textSize="25sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="5dp"
-                    android:text="Text Sync"
-                    android:textColor="#F2FFFC"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Clipboard sharing"
-                    android:textColor="#9DBCB6"
-                    android:textSize="10sp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="112dp"
-                android:layout_marginStart="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/ps_action_gold"
-                android:gravity="center_vertical"
-                android:orientation="vertical"
-                android:padding="15dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="⌁"
-                    android:textColor="#FFD98A"
-                    android:textSize="28sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="5dp"
-                    android:text="Web PIN Pairing"
-                    android:textColor="#FFF8E9"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Share with browser"
-                    android:textColor="#C8B68F"
-                    android:textSize="10sp" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:background="@drawable/ps_info"
-            android:orientation="horizontal"
-            android:padding="14dp">
-
-            <TextView
-                android:layout_width="34dp"
-                android:layout_height="34dp"
-                android:gravity="center"
-                android:text="⌁"
-                android:textColor="#9CA7FF"
-                android:textSize="21sp" />
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:paddingStart="10dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Private by design"
-                    android:textColor="#E9ECF7"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="Transfers stay on your local network."
-                    android:textColor="#8793A9"
-                    android:textSize="11sp" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Recent Activity"
-                android:textColor="#F2F4FF"
-                android:textSize="21sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="History"
-                android:textColor="#8C84FF"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="horizontal">
-
-            <LinearLayout
-                android:id="@+id/sentCard"
-                android:layout_width="0dp"
-                android:layout_height="92dp"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/ps_stat_blue"
-                android:clickable="true"
-                android:focusable="true"
-                android:foreground="?attr/selectableItemBackground"
-                android:gravity="center_vertical"
-                android:orientation="vertical"
-                android:padding="15dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="↑  SENT"
-                    android:textColor="#AAB5FF"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="Files"
-                    android:textColor="#F4F6FF"
-                    android:textSize="17sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:id="@+id/receivedCard"
-                android:layout_width="0dp"
-                android:layout_height="92dp"
-                android:layout_marginStart="6dp"
-                android:layout_weight="1"
-                android:background="@drawable/ps_stat_green"
-                android:clickable="true"
-                android:focusable="true"
-                android:foreground="?attr/selectableItemBackground"
-                android:gravity="center_vertical"
-                android:orientation="vertical"
-                android:padding="15dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="↓  RECEIVED"
-                    android:textColor="#82E5C8"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="Files"
-                    android:textColor="#F4FFFC"
-                    android:textSize="17sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="Sent files"
-            android:textColor="#E9ECF7"
-            android:textSize="17sp"
-            android:textStyle="bold" />
-
-        <com.photosync.uploader.TransferContainerLayout
-            android:id="@+id/sentFilesContainer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="9dp"
-            android:background="@drawable/ps_list"
-            android:orientation="vertical"
-            android:padding="8dp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:text="Received files"
-            android:textColor="#E9ECF7"
-            android:textSize="17sp"
-            android:textStyle="bold" />
-
-        <com.photosync.uploader.TransferContainerLayout
-            android:id="@+id/receivedFilesContainer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="9dp"
-            android:background="@drawable/ps_list"
-            android:orientation="vertical"
-            android:padding="8dp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:layout_marginTop="24dp"
-            android:paddingBottom="8dp"
-            android:text="PhotoSync • Local &amp; Private"
-            android:textColor="#5F6B80"
-            android:textSize="11sp" />
-
-        <com.photosync.uploader.ServerConnectionControls
-            android:id="@+id/connectionControls"
-            android:layout_width="1dp"
-            android:layout_height="1dp"
-            android:visibility="gone" />
-
-        <com.photosync.uploader.LocalServerInfoView
-            android:id="@+id/localServerInfo"
-            android:layout_width="1dp"
-            android:layout_height="1dp"
-            android:visibility="gone" />
-
     </LinearLayout>
-</ScrollView>
+
+    <ScrollView android:id="@+id/mainScroll" android:layout_width="match_parent" android:layout_height="0dp"
+        android:layout_weight="1" android:fillViewport="true" android:clipToPadding="false" android:background="#F5F8FF">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="16dp" android:paddingBottom="24dp">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="86dp" android:background="@drawable/ps_connected_card"
+                android:gravity="center_vertical" android:padding="14dp">
+                <TextView android:layout_width="14dp" android:layout_height="14dp" android:layout_marginEnd="10dp" android:background="@drawable/ps_green_dot"/>
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Connected"
+                        android:textColor="#101827" android:textSize="17sp" android:textStyle="bold"/>
+                    <TextView android:id="@+id/serverStatusText" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Ready for file transfer" android:textColor="#68748A" android:textSize="12sp"/>
+                </LinearLayout>
+                <View android:layout_width="1dp" android:layout_height="48dp" android:layout_marginEnd="12dp" android:background="#D9E0EC"/>
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1.1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Wi-Fi Network"
+                        android:textColor="#52607A" android:textSize="12sp" android:textStyle="bold"/>
+                    <TextView android:id="@+id/homeServerAddress" android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp" android:text="Waiting for server…" android:textColor="#182238" android:textSize="12sp"
+                        android:maxLines="1" android:ellipsize="end"/>
+                </LinearLayout>
+                <TextView android:id="@+id/copyAddressButton" android:layout_width="42dp" android:layout_height="42dp" android:gravity="center"
+                    android:text="▣" android:textColor="#315BEA" android:textSize="22sp" android:background="@drawable/ps_small_action"
+                    android:clickable="true" android:focusable="true"/>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="220dp" android:layout_marginTop="14dp"
+                android:background="@drawable/ps_light_hero" android:orientation="vertical" android:padding="20dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="TRANSFER FILES INSTANTLY"
+                    android:textColor="#53638A" android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.14"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp"
+                    android:text="Fast. Private.&#10;No Internet Needed." android:textColor="#111B32" android:textSize="25sp" android:textStyle="bold"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp"
+                    android:text="Send photos, videos and documents directly over your local network." android:textColor="#5E6C86" android:textSize="11sp"/>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="13dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center"
+                        android:text="🔒&#10;100% Private" android:textColor="#34456B" android:textSize="11sp"/>
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center"
+                        android:text="⚡&#10;High Speed" android:textColor="#34456B" android:textSize="11sp"/>
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center"
+                        android:text="☁&#10;No Cloud" android:textColor="#34456B" android:textSize="11sp"/>
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Quick Actions"
+                    android:textColor="#101827" android:textSize="21sp" android:textStyle="bold"/>
+                <TextView android:id="@+id/seeAllButton" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="See All  ›" android:textColor="#315BEA" android:textSize="13sp" android:textStyle="bold"/>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="116dp" android:layout_marginTop="10dp" android:orientation="horizontal">
+                <LinearLayout android:id="@+id/sendFilesAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="5dp"
+                    android:layout_weight="1" android:background="@drawable/ps_action_blue_light" android:gravity="center_vertical"
+                    android:padding="12dp" android:clickable="true" android:focusable="true">
+                    <TextView android:layout_width="56dp" android:layout_height="56dp" android:gravity="center" android:text="➤"
+                        android:textColor="#FFFFFF" android:textSize="27sp" android:background="@drawable/ps_circle_blue"/>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:paddingStart="9dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Send Files" android:textColor="#111827" android:textSize="16sp" android:textStyle="bold"/>
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Photos, Videos, Documents&#10;and More" android:textColor="#65718A" android:textSize="10sp"/>
+                    </LinearLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="›" android:textColor="#315BEA" android:textSize="28sp"/>
+                </LinearLayout>
+                <com.photosync.uploader.PeerModeButton android:id="@+id/p2pAction" android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_marginStart="5dp" android:layout_weight="1" android:background="@drawable/ps_action_green_light"
+                    android:gravity="center" android:padding="12dp" android:text="⇄  P2P Transfer&#10;Direct Phone to Phone"
+                    android:textAllCaps="false" android:textColor="#11352B" android:textSize="15sp" android:textStyle="bold"/>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="112dp" android:layout_marginTop="10dp" android:orientation="horizontal">
+                <com.photosync.uploader.TextTransferButton android:id="@+id/textSyncAction" android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_marginEnd="5dp" android:layout_weight="1" android:background="@drawable/ps_action_orange_light" android:gravity="center"
+                    android:text="▤  Text Sync&#10;Sync Clipboard Across&#10;Devices" android:textAllCaps="false" android:textColor="#4B2B12" android:textSize="14sp" android:textStyle="bold"/>
+                <LinearLayout android:id="@+id/webPinAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="5dp"
+                    android:layout_weight="1" android:background="@drawable/ps_action_purple_light" android:gravity="center_vertical"
+                    android:padding="12dp" android:clickable="true" android:focusable="true">
+                    <TextView android:layout_width="52dp" android:layout_height="52dp" android:gravity="center" android:text="⚿"
+                        android:textColor="#FFFFFF" android:textSize="28sp" android:background="@drawable/ps_circle_purple"/>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:paddingStart="9dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Web PIN Pairing" android:textColor="#261A50" android:textSize="14sp" android:textStyle="bold"/>
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Share Text &amp; Files&#10;Using PIN" android:textColor="#6D6390" android:textSize="10sp"/>
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="196dp" android:layout_marginTop="16dp" android:orientation="horizontal">
+                <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="6dp" android:layout_weight="1"
+                    android:background="@drawable/ps_white_card" android:orientation="vertical" android:padding="14dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="●  Connected Devices"
+                        android:textColor="#17213A" android:textSize="14sp" android:textStyle="bold"/>
+                    <TextView android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="10dp" android:background="@drawable/ps_device_row"
+                        android:gravity="center_vertical" android:padding="10dp" android:text="▣   This Phone&#10;     ●  This Device" android:textColor="#253451" android:textSize="12sp"/>
+                    <TextView android:id="@+id/pcDeviceRow" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="7dp" android:background="@drawable/ps_device_row"
+                        android:gravity="center_vertical" android:padding="10dp" android:text="▰   Windows PC&#10;     ●  Waiting for connection" android:textColor="#253451" android:textSize="12sp"/>
+                </LinearLayout>
+                <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="6dp" android:layout_weight="1"
+                    android:background="@drawable/ps_white_card" android:orientation="vertical" android:padding="14dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="▦  Scan to Connect"
+                        android:textColor="#17213A" android:textSize="14sp" android:textStyle="bold"/>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="4dp"
+                        android:text="Open PhotoSync on another device" android:textColor="#69758B" android:textSize="10sp"/>
+                    <TextView android:id="@+id/showPinButton" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="13dp"
+                        android:gravity="center" android:text="Pairing PIN&#10;—" android:textColor="#315BEA" android:textSize="15sp" android:textStyle="bold"
+                        android:background="@drawable/ps_pin_box" android:clickable="true" android:focusable="true"/>
+                    <TextView android:id="@+id/pairingPinText" android:layout_width="match_parent" android:layout_height="1dp" android:visibility="gone"/>
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="20dp" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Recent Activity"
+                    android:textColor="#101827" android:textSize="21sp" android:textStyle="bold"/>
+                <TextView android:id="@+id/clearHistoryButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Clear All  ▱"
+                    android:textColor="#53617A" android:textSize="12sp" android:clickable="true" android:focusable="true"/>
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp">
+                <TextView android:id="@+id/sentCard" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:layout_marginEnd="4dp"
+                    android:gravity="center" android:text="↑  Sent" android:textColor="#315BEA" android:textSize="11sp" android:background="@drawable/ps_filter_selected"
+                    android:clickable="true" android:focusable="true"/>
+                <TextView android:id="@+id/receivedCard" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:layout_marginStart="4dp"
+                    android:gravity="center" android:text="↓  Received" android:textColor="#52607A" android:textSize="11sp" android:background="@drawable/ps_filter"
+                    android:clickable="true" android:focusable="true"/>
+            </LinearLayout>
+            <LinearLayout android:id="@+id/sentFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical"/>
+            <LinearLayout android:id="@+id/receivedFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="6dp"/>
+
+            <EditText android:id="@+id/serverUrlInput" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="12dp"
+                android:background="@drawable/ps_input_light" android:hint="Manual PC server URL" android:inputType="textUri" android:singleLine="true"
+                android:paddingStart="12dp" android:paddingEnd="12dp" android:textColor="#17213A" android:textColorHint="#8792A7" android:textSize="12sp"/>
+            <Button android:id="@+id/selectButton" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginTop="10dp"
+                android:background="@drawable/ps_primary_light" android:text="Send Files  ›" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold"/>
+            <TextView android:id="@+id/statusText" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
+            <com.photosync.uploader.ServerConnectionControls android:id="@+id/connectionControls" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
+            <com.photosync.uploader.LocalServerInfoView android:id="@+id/localServerInfo" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="72dp" android:background="@drawable/ps_bottom_nav" android:gravity="center_vertical">
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="⌂&#10;Home" android:textColor="#315BEA" android:textSize="12sp"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="□&#10;Files" android:textColor="#46546E" android:textSize="12sp"/>
+        <TextView android:id="@+id/bottomSendButton" android:layout_width="0dp" android:layout_height="64dp" android:layout_weight="1" android:gravity="center"
+            android:text="➤&#10;Send" android:textColor="#FFFFFF" android:textSize="12sp" android:background="@drawable/ps_bottom_send"
+            android:clickable="true" android:focusable="true"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="◷&#10;History" android:textColor="#46546E" android:textSize="12sp"/>
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="▣&#10;Devices" android:textColor="#46546E" android:textSize="12sp"/>
+    </LinearLayout>
+</LinearLayout>
