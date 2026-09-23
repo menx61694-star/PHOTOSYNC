@@ -149,6 +149,14 @@
             <EditText android:id="@+id/serverUrlInput" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="12dp"
                 android:background="@drawable/ps_input_light" android:hint="Manual PC server URL" android:inputType="textUri" android:singleLine="true"
                 android:paddingStart="12dp" android:paddingEnd="12dp" android:textColor="#17213A" android:textColorHint="#8792A7" android:textSize="12sp"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="horizontal">
+                <Button android:id="@+id/findServerButton" android:layout_width="0dp" android:layout_height="50dp" android:layout_marginEnd="5dp"
+                    android:layout_weight="1" android:background="@drawable/ps_primary_light" android:text="Find Server" android:textAllCaps="false"
+                    android:textColor="#FFFFFF" android:textSize="14sp"/>
+                <Button android:id="@+id/saveServerButton" android:layout_width="0dp" android:layout_height="50dp" android:layout_marginStart="5dp"
+                    android:layout_weight="1" android:background="@drawable/ps_primary_light" android:text="Save &amp; Connect" android:textAllCaps="false"
+                    android:textColor="#FFFFFF" android:textSize="14sp"/>
+            </LinearLayout>
             <Button android:id="@+id/selectButton" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginTop="10dp"
                 android:background="@drawable/ps_primary_light" android:text="Send Files  ›" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold"/>
             <TextView android:id="@+id/statusText" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
