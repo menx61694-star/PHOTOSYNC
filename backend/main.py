@@ -10,7 +10,7 @@ from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pin_auth import install as install_pin_auth, session_phone_cookie
+from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
@@ -180,6 +180,10 @@ def get_file(device_id:str,source:str,filename:str):
     return FileResponse(path)
 @app.websocket('/ws')
 async def websocket_endpoint(websocket:WebSocket):
+    supplied_pin=(websocket.query_params.get('pairing_pin','') or websocket.headers.get('X-PhotoSync-Server-PIN','')).strip()
+    if not valid_server_pairing_pin(supplied_pin):
+        await websocket.close(code=1008, reason='PC server pairing PIN required')
+        return
     supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''));host=websocket.client.host if websocket.client else 'unknown';device_id=supplied or ip_owner_id(host);device_dirs(device_id);await manager.connect(websocket,device_id);await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'connections':len(manager.devices())});await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
     try:
         while True:await websocket.receive_text()
@@ -332,7 +336,7 @@ def discovery_loop():
         while True:
             data,addr=sock.recvfrom(1024)
             if data.decode('utf-8',errors='ignore').strip()!=DISCOVERY_TOKEN:continue
-            sock.sendto(json.dumps({'service':'PHOTOSYNC','version':1,'port':APP_PORT}).encode(),addr)
+            sock.sendto(json.dumps({'service':'PHOTOSYNC','version':1,'port':APP_PORT,'pairing_pin':server_pairing_pin()}).encode(),addr)
     except OSError:pass
     finally:sock.close()
 threading.Thread(target=discovery_loop,name='photosync-discovery',daemon=True).start()
