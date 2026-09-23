@@ -1,4 +1,5 @@
 import ipaddress
+import os
 import secrets
 import threading
 import time
@@ -10,6 +11,9 @@ from fastapi.responses import JSONResponse
 
 SESSION_TTL_SECONDS = 30 * 60
 MAX_ATTEMPTS_PER_MINUTE = 5
+SERVER_PAIRING_PIN = (os.getenv("PHOTOSYNC_SERVER_PIN", "") or "").strip()
+if not (len(SERVER_PAIRING_PIN) == 6 and SERVER_PAIRING_PIN.isdigit()):
+    SERVER_PAIRING_PIN = f"{secrets.randbelow(900000) + 100000:06d}"
 _LOCAL_SERVER_PORT = 18000
 _sessions = {}
 _attempts = defaultdict(deque)
@@ -53,6 +57,14 @@ def session_phone_cookie(token):
         _cleanup()
         data = _sessions.get(token)
         return data.get("phone_cookie") if data else None
+
+
+def server_pairing_pin():
+    return SERVER_PAIRING_PIN
+
+
+def valid_server_pairing_pin(pin: str):
+    return secrets.compare_digest((pin or "").strip(), SERVER_PAIRING_PIN)
 
 
 def _client_ip(request: Request):
@@ -182,6 +194,7 @@ _PUBLIC_EXACT = {
     "/",
     "/health",
     "/api/pin",
+    "/api/server-pin",
     "/api/pair",
     "/api/session",
     "/api/logout",
@@ -214,6 +227,10 @@ def install(app):
             "owner": "android_app",
             "message": "Enter the PIN shown for the selected phone in the PhotoSync app",
         }
+
+    @app.get("/api/server-pin")
+    def server_pin_info():
+        return {"pin_required": True, "pairing_pin": SERVER_PAIRING_PIN, "message": "Enter this PIN in the PhotoSync Android app when connecting to this PC server"}
 
     @app.post("/api/pair")
     def pair_endpoint(request: Request, pin: str, device_ip: str = "", device_id: str = ""):
@@ -265,7 +282,10 @@ def install(app):
             return await call_next(request)
 
         if request.headers.get(_APP_TRUST_HEADER) and _live_app_request(request):
-            return await call_next(request)
+            supplied_pin = request.headers.get("X-PhotoSync-Server-PIN", "")
+            if valid_server_pairing_pin(supplied_pin):
+                return await call_next(request)
+            return JSONResponse({"detail": "PC server pairing PIN required"}, status_code=401)
 
         token = _request_session(request)
         if valid_session(token):
