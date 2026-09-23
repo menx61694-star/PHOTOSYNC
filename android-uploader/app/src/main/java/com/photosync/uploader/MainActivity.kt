@@ -111,7 +111,6 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
             saveAndConnect(url)
         }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
-        findViewById<Button>(R.id.selectButton).setOnClickListener { picker.launch("*/*") }
         findViewById<View>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
         findViewById<View>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
         findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
@@ -397,7 +396,6 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         try {
             val color = Color.parseColor(raw)
             findViewById<View>(R.id.menuButton)?.backgroundTintList = ColorStateList.valueOf(color)
-            findViewById<Button>(R.id.selectButton)?.backgroundTintList = ColorStateList.valueOf(color)
             findViewById<Button>(R.id.findServerButton)?.backgroundTintList = ColorStateList.valueOf(color)
             findViewById<Button>(R.id.saveServerButton)?.backgroundTintList = ColorStateList.valueOf(color)
         } catch (_: Exception) { }
