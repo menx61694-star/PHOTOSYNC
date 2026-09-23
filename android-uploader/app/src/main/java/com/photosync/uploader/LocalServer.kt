@@ -10,6 +10,13 @@ import android.content.Context
  * lazy and failures are converted into an unavailable-server state.
  */
 class LocalServer(context: Context, port: Int = 18000) {
+    data class WebClientInfo(
+        val id: String,
+        val ip: String,
+        val connectedAt: Long,
+        val lastSeen: Long
+    )
+
     private val delegate: LocalWebServer? by lazy {
         try {
             LocalWebServer(context.applicationContext, port)
@@ -62,5 +69,24 @@ class LocalServer(context: Context, port: Int = 18000) {
         delegate?.url()
     } catch (_: Throwable) {
         null
+    }
+
+    fun webClients(): List<WebClientInfo> = try {
+        delegate?.webClients()?.map {
+            WebClientInfo(
+                id = it.id,
+                ip = it.ip,
+                connectedAt = it.connectedAt,
+                lastSeen = it.lastSeen
+            )
+        } ?: emptyList()
+    } catch (_: Throwable) {
+        emptyList()
+    }
+
+    fun disconnectWebClient(id: String): Boolean = try {
+        delegate?.disconnectWebClient(id) == true
+    } catch (_: Throwable) {
+        false
     }
 }
