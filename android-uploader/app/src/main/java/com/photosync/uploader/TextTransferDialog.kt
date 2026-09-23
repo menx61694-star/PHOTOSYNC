@@ -194,4 +194,6 @@ private object ToastCompat {
         android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
     }
 }
-\nprivate fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()\n
+
+private fun dp(context: Context, value: Int): Int =
+    (value * context.resources.displayMetrics.density).toInt()
