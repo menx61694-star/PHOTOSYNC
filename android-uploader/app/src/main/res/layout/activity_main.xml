@@ -73,6 +73,9 @@
                             android:gravity="center_vertical" android:paddingStart="12dp" android:text="Pairing PIN: —"
                             android:textColor="#315BEA" android:textSize="13sp" android:textStyle="bold" android:background="@drawable/ps_pin_box"
                             android:clickable="true" android:focusable="true"/>
+                        <Button android:id="@+id/webPairingButton" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="7dp"
+                            android:background="@drawable/ps_filter_selected" android:text="Web Pairing" android:textAllCaps="false"
+                            android:textColor="#FFFFFF" android:textSize="11sp"/>
                         <TextView android:id="@+id/copyAddressButton" android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="7dp"
                             android:gravity="center" android:text="▣" android:textColor="#315BEA" android:textSize="22sp"
                             android:background="@drawable/ps_small_action" android:clickable="true" android:focusable="true"/>
@@ -144,14 +147,7 @@
                 <com.photosync.uploader.TextTransferButton android:id="@+id/textSyncAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="5dp" android:layout_weight="1"
                     android:background="@drawable/ps_action_orange_light" android:gravity="center" android:text="▤  Text Sync&#10;Sync Clipboard Across&#10;Devices"
                     android:textAllCaps="false" android:textColor="#4B2B12" android:textSize="14sp" android:textStyle="bold"/>
-                <LinearLayout android:id="@+id/webPinAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="5dp" android:layout_weight="1"
-                    android:background="@drawable/ps_action_purple_light" android:gravity="center_vertical" android:padding="12dp" android:clickable="true" android:focusable="true">
-                    <TextView android:layout_width="52dp" android:layout_height="52dp" android:gravity="center" android:text="⚿" android:textColor="#FFFFFF" android:textSize="28sp" android:background="@drawable/ps_circle_purple"/>
-                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:paddingStart="9dp">
-                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Web PIN Pairing" android:textColor="#261A50" android:textSize="14sp" android:textStyle="bold"/>
-                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Share Text &amp; Files&#10;Using PIN" android:textColor="#6D6390" android:textSize="10sp"/>
-                    </LinearLayout>
-                </LinearLayout>
+                <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
             </LinearLayout>
 
             <LinearLayout android:layout_width="match_parent" android:layout_height="196dp" android:layout_marginTop="16dp" android:orientation="horizontal">
@@ -162,12 +158,7 @@
                     <TextView android:id="@+id/pcDeviceRow" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="7dp" android:background="@drawable/ps_device_row" android:gravity="center_vertical" android:padding="10dp"
                         android:text="▰   Windows PC&#10;     ●  Waiting for connection" android:textColor="#253451" android:textSize="12sp"/>
                 </LinearLayout>
-                <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="6dp" android:layout_weight="1" android:background="@drawable/ps_white_card" android:orientation="vertical" android:padding="14dp">
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="▦  Web Pairing" android:textColor="#17213A" android:textSize="14sp" android:textStyle="bold"/>
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Manage browser connections" android:textColor="#69758B" android:textSize="10sp"/>
-                    <Button android:id="@+id/webPairingButton" android:layout_width="match_parent" android:layout_height="58dp" android:layout_marginTop="13dp"
-                        android:background="@drawable/ps_pin_box" android:text="Open Web Pairing" android:textAllCaps="false" android:textColor="#315BEA" android:textSize="13sp" android:textStyle="bold"/>
-                </LinearLayout>
+
             </LinearLayout>
 
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="20dp" android:gravity="center_vertical">
