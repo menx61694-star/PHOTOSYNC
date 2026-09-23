@@ -116,8 +116,12 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         findViewById<View>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
         findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
         findViewById<LocalServerInfoView>(R.id.localServerInfo).setListener(this)
+        findViewById<Button>(R.id.startEmbeddedButton).setOnClickListener { onEmbeddedStartRequested() }
+        findViewById<Button>(R.id.stopEmbeddedButton).setOnClickListener { onEmbeddedStopRequested() }
+        findViewById<Button>(R.id.connectServerButton).setOnClickListener { onConnectRequested() }
+        findViewById<Button>(R.id.disconnectServerButton).setOnClickListener { onDisconnectRequested() }
+        findViewById<Button>(R.id.webPairingButton).setOnClickListener { showWebPairingDialog() }
         findViewById<View>(R.id.sendFilesAction).setOnClickListener { picker.launch("*/*") }
-        findViewById<View>(R.id.webPinAction).setOnClickListener { showWebPairingDialog() }
         findViewById<View>(R.id.showPinButton).setOnClickListener { showWebPairingDialog() }
         findViewById<View>(R.id.copyAddressButton).setOnClickListener {
             val address = homeServerAddress.text.toString()
@@ -135,18 +139,51 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
     private fun refreshHomeServerSummary() {
         try {
             val localRunning = localServer.isRunning()
+            val embeddedStatus = findViewById<TextView>(R.id.embeddedServerStatus)
+            val embeddedAddress = findViewById<TextView>(R.id.embeddedAddressText)
+            val otherStatus = findViewById<TextView>(R.id.otherServerStatus)
+            val startButton = findViewById<Button>(R.id.startEmbeddedButton)
+            val stopButton = findViewById<Button>(R.id.stopEmbeddedButton)
+            val connectButton = findViewById<Button>(R.id.connectServerButton)
+            val disconnectButton = findViewById<Button>(R.id.disconnectServerButton)
             if (localRunning) {
-                homeServerAddress.text = localServer.url() ?: "Waiting for network…"
+                val address = localServer.url() ?: "Waiting for network…"
                 val pin = localServer.currentPin()
-                pairingPinText.text = "Pairing PIN: ${pin}"
-                findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN\n${pin}"
-                serverStatus.text = "Ready for file transfer"
+                homeServerAddress.text = address
+                embeddedAddress.text = "Web address: $address"
+                embeddedStatus.text = "Running • browsers can connect"
+                pairingPinText.text = "Pairing PIN: $pin"
+                findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN: $pin"
+                serverStatus.text = "Embedded server connected"
+                startButton.isEnabled = false
+                stopButton.isEnabled = true
+                connectButton.isEnabled = false
+                disconnectButton.isEnabled = false
+                otherStatus.text = "Disabled while Embedded Server is running"
             } else if (backendServerUrl.isNotBlank()) {
                 homeServerAddress.text = backendServerUrl
+                embeddedAddress.text = "Web address: unavailable"
+                embeddedStatus.text = "Stopped"
                 pairingPinText.text = "Pairing PIN: —"
+                findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN: —"
+                serverStatus.text = "PC server connected"
+                startButton.isEnabled = true
+                stopButton.isEnabled = false
+                connectButton.isEnabled = true
+                disconnectButton.isEnabled = true
+                otherStatus.text = "Connected • $backendServerUrl"
             } else {
-                homeServerAddress.text = "Waiting for server…"
+                homeServerAddress.text = "—"
+                embeddedAddress.text = "Web address: unavailable"
+                embeddedStatus.text = "Stopped"
                 pairingPinText.text = "Pairing PIN: —"
+                findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN: —"
+                serverStatus.text = "No server selected"
+                startButton.isEnabled = true
+                stopButton.isEnabled = false
+                connectButton.isEnabled = true
+                disconnectButton.isEnabled = false
+                otherStatus.text = "Not connected"
             }
         } catch (_: Throwable) {
             homeServerAddress.text = "Waiting for server…"
@@ -229,7 +266,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                     if (startedOk && !url.isNullOrBlank()) {
                         prefs.edit().putString("server_url", url).apply()
                         serverUrlInput.setText(url)
-                        serverStatus.text = "● Local Server: Running"
+                        serverStatus.text = "Embedded server connected"
                         status.text = "Embedded server active ✓"
                         refreshLists()
                         refreshHomeServerSummary()
@@ -255,7 +292,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
             prefs.edit().remove("server_url").remove("backend_server_url").apply()
             backendServerUrl = ""
             serverUrlInput.setText("")
-            serverStatus.text = "● Local Server: Stopped"
+            serverStatus.text = "No server selected"
             status.text = "Embedded server stopped"
             refreshHomeServerSummary()
         } catch (_: Throwable) {
