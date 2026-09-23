@@ -24,6 +24,8 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     private val random = SecureRandom()
     @Volatile private var pin = generatePin()
     private val sessions = ConcurrentHashMap<String, Long>()
+    private data class WebClient(val token: String, val ip: String, val connectedAt: Long, @Volatile var lastSeen: Long)
+    private val webClients = ConcurrentHashMap<String, WebClient>()
     private val attempts = ConcurrentHashMap<String, MutableList<Long>>()
     private val lifetime = 30 * 60 * 1000L
     private val root = File(context.filesDir, "photosync_local_server")
@@ -42,7 +44,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             s.bind(java.net.InetSocketAddress(port), 50)
             serverSocket = s
             pin = generatePin()
-            sessions.clear(); attempts.clear(); running = true
+            sessions.clear(); webClients.clear(); attempts.clear(); webClients.clear(); attempts.clear(); running = true
             executor?.shutdownNow()
             executor = Executors.newCachedThreadPool()
             executor?.execute { acceptLoop() }
@@ -69,6 +71,9 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     fun isRunning() = running && serverSocket?.isClosed == false
     fun currentPin() = pin
     fun isAuthorized(token: String?) = token != null && sessions[token]?.let { System.currentTimeMillis() < it } == true
+    data class WebClientInfo(val id: String, val ip: String, val connectedAt: Long, val lastSeen: Long)
+    fun webClients(): List<WebClientInfo> = webClients.values.sortedByDescending { it.lastSeen }.map { WebClientInfo(it.token.take(8), it.ip, it.connectedAt, it.lastSeen) }
+    fun disconnectWebClient(id: String): Boolean { val key = webClients.keys.firstOrNull { it.take(8) == id } ?: return false; webClients.remove(key); sessions.remove(key); return true }
 
     fun localIpv4(): String? {
         return try {
@@ -133,13 +138,16 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                 val clientIp = it.inetAddress?.hostAddress ?: "unknown"
                 val token = parseCookie(headers["cookie"])
                 val appTrusted = clientIp == localIpv4() && !headers["x-photosync-device-id"].isNullOrBlank()
+                if (token != null && isAuthorized(token)) webClients[token]?.lastSeen = System.currentTimeMillis()
                 val authorized = isAuthorized(token) || appTrusted
                 val response = when {
                     path == "/" || path == "/dashboard" || path == "/dashboard/" -> html(page())
                     path == "/health" && method == "GET" -> json("{\"ok\":true,\"running\":"+isRunning()+"}")
                     path == "/api/pair" && method == "POST" -> pair(clientIp, query["pin"] ?: "")
                     path == "/api/session" -> if (authorized) json("{\"authorized\":true,\"expires_in_seconds\":1800}") else json("{\"authorized\":false}", "401 Unauthorized")
-                    path == "/api/logout" && method == "POST" -> logout()
+                    path == "/api/logout" && method == "POST" -> logout(token)
+                    path == "/api/web-clients" && method == "GET" -> webClientsResponse()
+                    path == "/api/web-clients/disconnect" && method == "POST" -> disconnectWebClientResponse(query["id"])
                     !authorized -> json("{\"detail\":\"PIN pairing required\"}", "401 Unauthorized")
                     path == "/files" && method == "GET" -> files(query["source"])
                     path.startsWith("/files/") && method == "GET" -> file(path, query["download"] == "1")
@@ -188,13 +196,14 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         if (supplied.length == 6 && supplied == pin) {
             list.clear()
             val t = generateToken(); sessions[t] = now + lifetime
+            webClients[t] = WebClient(t, ip, now, now)
             return Response("200 OK", "application/json; charset=utf-8", "{\"paired\":true,\"expires_in_seconds\":1800}", cookie = "photosync_session=$t; Max-Age=1800; Path=/; HttpOnly; SameSite=Lax")
         }
         list.add(now)
         return json("{\"paired\":false,\"message\":\"Invalid PIN\"}", "403 Forbidden")
     }
 
-    private fun logout() = Response("200 OK", "application/json; charset=utf-8", "{\"ok\":true}", cookie = "photosync_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax")
+    private fun logout(token: String?): Response { if (token != null) { sessions.remove(token); webClients.remove(token) }; return Response("200 OK", "application/json; charset=utf-8", "{\"ok\":true}", cookie = "photosync_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax") }
     private fun parseCookie(h: String?): String? = h?.split(';')?.map { it.trim() }?.firstOrNull { it.startsWith("photosync_session=") }?.substringAfter('=')
     private fun parseQuery(q: String) = q.split('&').mapNotNull { p -> val x = p.split('=', limit = 2); if (x.size == 2) x[0] to URLDecoder.decode(x[1], "UTF-8") else null }.toMap()
     private fun safeName(v: String?) = File(v ?: "file").name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(180).ifBlank { "file" }
@@ -279,6 +288,19 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         val target = File(downloads, name)
         target.writeText(text, Charsets.UTF_8)
         return json(fileJson(target, "received").toString())
+    }
+
+    private fun webClientsResponse(): Response {
+        val a = JSONArray()
+        webClients().forEach { c ->
+            a.put(JSONObject().apply { put("id", c.id); put("ip", c.ip); put("connected_at", c.connectedAt); put("last_seen", c.lastSeen) })
+        }
+        return json(a.toString())
+    }
+
+    private fun disconnectWebClientResponse(id: String?): Response {
+        if (id.isNullOrBlank() || !disconnectWebClient(id)) return json("{\"ok\":false,\"detail\":\"Web client not found\"}", "404 Not Found")
+        return json("{\"ok\":true}")
     }
 
     private fun info(): Response {
