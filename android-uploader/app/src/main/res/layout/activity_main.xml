@@ -169,8 +169,6 @@
             <LinearLayout android:id="@+id/receivedFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="6dp"/>
 
             <TextView android:id="@+id/statusText" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
-            <com.photosync.uploader.ServerConnectionControls android:id="@+id/connectionControls" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
-            <com.photosync.uploader.LocalServerInfoView android:id="@+id/localServerInfo" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
             <TextView android:id="@+id/pairingPinText" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
         </LinearLayout>
     </ScrollView>
