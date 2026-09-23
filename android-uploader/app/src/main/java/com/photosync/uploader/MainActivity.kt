@@ -112,8 +112,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<Button>(R.id.selectButton).setOnClickListener { picker.launch("*/*") }
-        findViewById<LinearLayout>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
-        findViewById<LinearLayout>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
+        findViewById<View>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
+        findViewById<View>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
         findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
         findViewById<LocalServerInfoView>(R.id.localServerInfo).setListener(this)
         findViewById<View>(R.id.sendFilesAction).setOnClickListener { picker.launch("*/*") }
