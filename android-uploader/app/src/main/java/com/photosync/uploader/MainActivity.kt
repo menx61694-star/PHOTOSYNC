@@ -137,7 +137,9 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
             val localRunning = localServer.isRunning()
             if (localRunning) {
                 homeServerAddress.text = localServer.url() ?: "Waiting for network…"
-                pairingPinText.text = "Pairing PIN: \${localServer.currentPin()}"
+                val pin = localServer.currentPin()
+                pairingPinText.text = "Pairing PIN: ${pin}"
+                findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN\n${pin}"
                 serverStatus.text = "Ready for file transfer"
             } else if (backendServerUrl.isNotBlank()) {
                 homeServerAddress.text = backendServerUrl
