@@ -108,10 +108,52 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<Button>(R.id.selectButton).setOnClickListener { picker.launch("*/*") }
-        findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
-        findViewById<LocalServerInfoView>(R.id.localServerInfo).setListener(this)
         findViewById<LinearLayout>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
         findViewById<LinearLayout>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
+        findViewById<View>(R.id.sendFilesQuickCard).setOnClickListener { picker.launch("*/*") }
+        findViewById<View>(R.id.textSyncCard).setOnClickListener { TextTransferDialog.show(this) }
+        findViewById<View>(R.id.webPinCard).setOnClickListener { showWebPairingDialog() }
+        findViewById<View>(R.id.connectionStatusCard).setOnClickListener { showWebPairingDialog() }
+    }
+
+    private fun showWebPairingDialog() {
+        val appServer = localServer
+        if (!appServer.isRunning()) {
+            AlertDialog.Builder(this)
+                .setTitle("Web PIN Pairing")
+                .setMessage("Embedded server is stopped. Start it to let browsers connect to this phone.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Start Server") { _, _ -> onEmbeddedStartRequested() }
+                .show()
+            return
+        }
+
+        val clients = appServer.webClients()
+        val details = buildString {
+            append("Web address: ").append(appServer.url() ?: "waiting for network…")
+            append("\n\nPairing PIN: ").append(appServer.currentPin())
+            append("\n\nConnected browsers: ").append(clients.size)
+            clients.forEach { append("\n• ").append(it.ip).append("  (").append(it.id).append(")") }
+        }
+
+        val builder = AlertDialog.Builder(this)
+            .setTitle("Web PIN Pairing")
+            .setMessage(details)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Refresh PIN") { _, _ ->
+                appServer.refreshPin()
+                showWebPairingDialog()
+            }
+
+        if (clients.isNotEmpty()) {
+            builder.setPositiveButton("Disconnect All") { _, _ ->
+                clients.forEach { appServer.disconnectWebClient(it.id) }
+                showWebPairingDialog()
+            }
+        } else {
+            builder.setPositiveButton("Stop Server") { _, _ -> onEmbeddedStopRequested() }
+        }
+        builder.show()
     }
 
     override fun onStart() {
