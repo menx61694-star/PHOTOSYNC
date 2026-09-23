@@ -55,6 +55,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
     private lateinit var status: TextView
     private lateinit var serverStatus: TextView
     private lateinit var serverUrlInput: EditText
+    private lateinit var homeServerAddress: TextView
+    private lateinit var pairingPinText: TextView
     private lateinit var sentFilesContainer: LinearLayout
     private lateinit var receivedFilesContainer: LinearLayout
     private lateinit var mainScroll: ScrollView
@@ -91,6 +93,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         sentFilesContainer = findViewById(R.id.sentFilesContainer)
         receivedFilesContainer = findViewById(R.id.receivedFilesContainer)
         mainScroll = findViewById(R.id.mainScroll)
+        homeServerAddress = findViewById(R.id.homeServerAddress)
+        pairingPinText = findViewById(R.id.pairingPinText)
 
         val savedServer = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
         backendServerUrl = prefs.getString("backend_server_url", "")?.trim()?.removeSuffix("/") ?: ""
@@ -112,6 +116,40 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         findViewById<LinearLayout>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
         findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
         findViewById<LocalServerInfoView>(R.id.localServerInfo).setListener(this)
+        findViewById<View>(R.id.sendFilesAction).setOnClickListener { picker.launch("*/*") }
+        findViewById<View>(R.id.webPinAction).setOnClickListener { showWebPairingDialog() }
+        findViewById<View>(R.id.showPinButton).setOnClickListener { showWebPairingDialog() }
+        findViewById<View>(R.id.copyAddressButton).setOnClickListener {
+            val address = homeServerAddress.text.toString()
+            if (address.isNotBlank() && !address.contains("Waiting")) {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("PhotoSync server", address))
+                Toast.makeText(this, "Server address copied", Toast.LENGTH_SHORT).show()
+            }
+        }
+        findViewById<View>(R.id.bottomSendButton).setOnClickListener { picker.launch("*/*") }
+        findViewById<View>(R.id.clearHistoryButton).setOnClickListener { refreshLists() }
+        refreshHomeServerSummary()
+    }
+
+    private fun refreshHomeServerSummary() {
+        try {
+            val localRunning = localServer.isRunning()
+            if (localRunning) {
+                homeServerAddress.text = localServer.url() ?: "Waiting for network…"
+                pairingPinText.text = "Pairing PIN: \${localServer.currentPin()}"
+                serverStatus.text = "Ready for file transfer"
+            } else if (backendServerUrl.isNotBlank()) {
+                homeServerAddress.text = backendServerUrl
+                pairingPinText.text = "Pairing PIN: —"
+            } else {
+                homeServerAddress.text = "Waiting for server…"
+                pairingPinText.text = "Pairing PIN: —"
+            }
+        } catch (_: Throwable) {
+            homeServerAddress.text = "Waiting for server…"
+            pairingPinText.text = "Pairing PIN: —"
+        }
     }
 
     private fun showWebPairingDialog() {
@@ -162,6 +200,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         // Server activation is now explicit: the user chooses Embedded or PC server.
         handler.removeCallbacks(receiveRefreshRunnable)
         handler.postDelayed(receiveRefreshRunnable, 3000)
+        refreshHomeServerSummary()
     }
 
     override fun onStop() {
@@ -191,15 +230,18 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                         serverStatus.text = "● Local Server: Running"
                         status.text = "Embedded server active ✓"
                         refreshLists()
+                        refreshHomeServerSummary()
                     } else {
                         serverStatus.text = "● Local Server: Not running"
                         status.text = "Unable to start embedded server"
+                        refreshHomeServerSummary()
                     }
                 }
             }.start()
         } catch (t: Throwable) {
             serverStatus.text = "● Local Server: Not running"
             status.text = "Unable to start embedded server"
+            refreshHomeServerSummary()
         }
     }
 
@@ -213,6 +255,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
             serverUrlInput.setText("")
             serverStatus.text = "● Local Server: Stopped"
             status.text = "Embedded server stopped"
+            refreshHomeServerSummary()
         } catch (_: Throwable) {
             serverStatus.text = "● Local Server: Stopped"
         }
@@ -378,6 +421,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
                     serverStatus.text = "● Server: Connected"
                     status.text = "Connected ✓"
                     refreshLists()
+                    refreshHomeServerSummary()
                 }
             }
 
