@@ -259,19 +259,29 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
             prefs.edit().remove("backend_server_url").remove("server_pin").apply()
             val appServer = localServer
             Thread {
-                val startedOk = appServer.start()
-                val url = appServer.url()
-                runOnUiThread {
-                    if (startedOk && !url.isNullOrBlank()) {
-                        prefs.edit().putString("server_url", url).apply()
-                        serverUrlInput.setText(url)
-                        serverStatus.text = "Embedded server connected"
-                        status.text = "Embedded server active ✓"
+                try {
+                    val startedOk = appServer.start()
+                    val url = if (startedOk) appServer.url() else null
+                    runOnUiThread {
                         embeddedStarting = false
+                        if (startedOk && !url.isNullOrBlank()) {
+                            prefs.edit().putString("server_url", url).apply()
+                            serverUrlInput.setText(url)
+                            serverStatus.text = "Embedded server connected"
+                            status.text = "Embedded server active ✓"
+                        } else {
+                            try { appServer.stop() } catch (_: Throwable) { }
+                            serverStatus.text = "● Local Server: Not running"
+                            status.text = "Unable to start embedded server"
+                        }
                         refreshHomeServerSummary()
-                    } else {
+                    }
+                } catch (t: Throwable) {
+                    try { appServer.stop() } catch (_: Throwable) { }
+                    runOnUiThread {
+                        embeddedStarting = false
                         serverStatus.text = "● Local Server: Not running"
-                        status.text = "Unable to start embedded server"
+                        status.text = "Embedded server start failed safely"
                         refreshHomeServerSummary()
                     }
                 }
