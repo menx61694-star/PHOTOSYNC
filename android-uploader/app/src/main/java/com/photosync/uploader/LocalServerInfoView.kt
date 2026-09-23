@@ -76,8 +76,25 @@ class LocalServerInfoView @JvmOverloads constructor(
         val serverButtons = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(startServer, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(stopServer, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = 8 }
+
+            addView(
+                startServer,
+                LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            )
+
+            val stopParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply {
+                marginStart = 8
+            }
+
+            addView(stopServer, stopParams)
         }
         addView(status)
         addView(address)
