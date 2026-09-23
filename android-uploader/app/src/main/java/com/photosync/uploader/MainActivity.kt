@@ -110,10 +110,8 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         findViewById<Button>(R.id.selectButton).setOnClickListener { picker.launch("*/*") }
         findViewById<LinearLayout>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
         findViewById<LinearLayout>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
-        findViewById<View>(R.id.sendFilesQuickCard).setOnClickListener { picker.launch("*/*") }
-        findViewById<View>(R.id.textSyncCard).setOnClickListener { TextTransferDialog.show(this) }
-        findViewById<View>(R.id.webPinCard).setOnClickListener { showWebPairingDialog() }
-        findViewById<View>(R.id.connectionStatusCard).setOnClickListener { showWebPairingDialog() }
+        findViewById<ServerConnectionControls>(R.id.connectionControls).setListener(this)
+        findViewById<LocalServerInfoView>(R.id.localServerInfo).setListener(this)
     }
 
     private fun showWebPairingDialog() {
