@@ -8,6 +8,9 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.ViewGroup
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -33,8 +36,21 @@ object TextTransferDialog {
             setTextColor(Color.WHITE)
             setHintTextColor(0xFF8795A8.toInt())
             gravity = Gravity.TOP or Gravity.START
-            minLines = 6
+            minLines = 1
             maxLines = 12
+            isVerticalScrollBarEnabled = true
+            setOnFocusChangeListener { _, _ -> }
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    post {
+                        val desired = (lineHeight * (lineCount.coerceIn(1, 12))) + paddingTop + paddingBottom
+                        layoutParams = layoutParams.apply { height = desired.coerceAtMost(dp(context, 260)) }
+                        requestLayout()
+                    }
+                }
+                override fun afterTextChanged(s: Editable?) = Unit
+            })
             setPadding(24, 20, 24, 20)
             setBackgroundColor(0xFF172235.toInt())
         }
@@ -44,10 +60,10 @@ object TextTransferDialog {
             addView(input, LinearLayout.LayoutParams(-1, -2))
         }
         val dialog = AlertDialog.Builder(context)
-            .setTitle("Text Transfer")
+            .setTitle("Text / Clipboard Transfer")
             .setView(box)
             .setPositiveButton("Send", null)
-            .setNeutralButton("Received Text", null)
+            .setNeutralButton("Paste", null)
             .setNegativeButton("Close", null)
             .create()
 
@@ -58,8 +74,12 @@ object TextTransferDialog {
                 send(context, text, dialog)
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                showReceived(context)
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                val clip = clipboard?.primaryClip
+                val pasted = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context).toString() else ""
+                if (pasted.isBlank()) ToastCompat.show(context, "Clipboard has no text") else input.append(pasted)
             }
+            input.requestFocus()
         }
         dialog.show()
     }
@@ -166,3 +186,4 @@ private object ToastCompat {
         android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
     }
 }
+\nprivate fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()\n
