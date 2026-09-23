@@ -54,16 +54,27 @@ object TextTransferDialog {
             setPadding(24, 20, 24, 20)
             setBackgroundColor(0xFF172235.toInt())
         }
+        val paste = Button(context).apply {
+            text = "Paste from clipboard"
+            isAllCaps = false
+        }
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(20, 8, 20, 0)
             addView(input, LinearLayout.LayoutParams(-1, -2))
+            addView(paste, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
+        }
+        paste.setOnClickListener {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            val clip = clipboard?.primaryClip
+            val pasted = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context).toString() else ""
+            if (pasted.isBlank()) ToastCompat.show(context, "Clipboard has no text") else input.append(pasted)
         }
         val dialog = AlertDialog.Builder(context)
             .setTitle("Text / Clipboard Transfer")
             .setView(box)
             .setPositiveButton("Send", null)
-            .setNeutralButton("Paste", null)
+            .setNeutralButton("Receive", null)
             .setNegativeButton("Close", null)
             .create()
 
@@ -74,10 +85,7 @@ object TextTransferDialog {
                 send(context, text, dialog)
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                val clip = clipboard?.primaryClip
-                val pasted = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context).toString() else ""
-                if (pasted.isBlank()) ToastCompat.show(context, "Clipboard has no text") else input.append(pasted)
+                showReceived(context)
             }
             input.requestFocus()
         }
