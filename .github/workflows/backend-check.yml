@@ -33,7 +33,7 @@ jobs:
 
       - name: Import backend and build QR payload
         working-directory: backend
-        run: python -c "import main; print(main._pc_qr_payload())"
+        run: python -c "import main; payload=main._pc_qr_payload(); qr=main.server_qr(); assert payload.startswith('{'); assert qr.media_type == 'image/svg+xml'; assert len(qr.body) > 100; print(payload)"
 
       - name: Check dashboard JavaScript
         run: |
