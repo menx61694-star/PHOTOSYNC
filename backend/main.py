@@ -294,7 +294,16 @@ async def websocket_endpoint(websocket:WebSocket):
     if not valid_server_pairing_pin(supplied_pin):
         await websocket.close(code=1008, reason='PC server pairing PIN required')
         return
-    supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''));host=websocket.client.host if websocket.client else 'unknown';device_id=supplied or ip_owner_id(host);device_dirs(device_id);await manager.connect(websocket,device_id);await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'connections':len(manager.devices())});await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
+    supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''))
+    transport_ip=websocket.client.host if websocket.client else 'unknown'
+    advertised_ip=(websocket.query_params.get('device_ip','') or '').strip()
+    host=advertised_ip if _safe_phone_ip(advertised_ip) else transport_ip
+    device_id=supplied or ip_owner_id(host)
+    device_dirs(device_id)
+    await manager.connect(websocket,device_id)
+    manager.connection_ips[websocket]=host
+    await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'connections':len(manager.devices())})
+    await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
     try:
         while True:await websocket.receive_text()
     except WebSocketDisconnect:
