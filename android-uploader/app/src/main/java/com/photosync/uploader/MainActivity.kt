@@ -629,10 +629,12 @@ class MainActivity : AppCompatActivity() {
     private fun wsUrl(baseUrl: String = currentServerUrl()): String {
         val base = baseUrl.trim().removeSuffix("/")
         val id = URLEncoder.encode(deviceIdentity.id, "UTF-8")
+        val phoneIp = localServer.localIpv4()?.trim().orEmpty()
+        val ipParam = if (phoneIp.isNotBlank()) "&device_ip=" + URLEncoder.encode(phoneIp, "UTF-8") else ""
         return when {
-            base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws?device_id=$id"
-            base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws?device_id=$id"
-            else -> "ws://$base/ws?device_id=$id"
+            base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws?device_id=$id$ipParam"
+            base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws?device_id=$id$ipParam"
+            else -> "ws://$base/ws?device_id=$id$ipParam"
         }
     }
 
