@@ -2,7 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 import asyncio
 import http.client
-import re, json, socket, threading, hashlib, secrets, io
+import re, json, socket, threading, hashlib, secrets, io, ipaddress
 from datetime import datetime, timezone
 from urllib.parse import quote
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
