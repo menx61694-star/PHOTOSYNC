@@ -104,12 +104,9 @@ class MainActivity : AppCompatActivity() {
                 return@registerForActivityResult
             }
             serverUrlInput.setText(url)
-            if (pin.length == 6 && pin.all(Char::isDigit)) {
-                serverPinInput.setText(pin)
-                saveAndConnect(url, pin)
-            } else {
-                fetchPcPairingPin(url, connectAfterFetch = true)
-            }
+            // QR may have been generated before the PC PIN was refreshed.
+            // Re-fetch the current PIN from the scanned server before connecting.
+            fetchPcPairingPin(url, connectAfterFetch = true, fallbackPin = pin)
         } catch (_: Exception) {
             status.text = "Invalid PhotoSync QR code"
         }
@@ -147,6 +144,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.fetchPinButton).setOnClickListener {
             fetchPcPairingPin(serverUrlInput.text.toString().trim().removeSuffix("/"), connectAfterFetch = false)
         }
+        findViewById<Button>(R.id.refreshPcPinButton).setOnClickListener {
+            refreshPcPairingPin()
+        }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<Button>(R.id.scanQrButton).setOnClickListener {
             val options = ScanOptions()
@@ -171,7 +171,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.refreshPinButton).setOnClickListener { refreshEmbeddedPin() }
         findViewById<View>(R.id.sendFilesAction).setOnClickListener { picker.launch("*/*") }
         findViewById<View>(R.id.receiveFilesAction).setOnClickListener {
-            mainScroll.smoothScrollTo(0, receivedFilesContainer.top)
+            showHomePage()
+            mainScroll.post { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
             status.text = if (localServer.isRunning()) "Receive area ready — files sent to this phone will appear here" else "Connect to a PC server to receive files"
         }
         findViewById<View>(R.id.showPinButton).setOnClickListener { showWebPairingDialog() }
@@ -183,10 +184,12 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Server address copied", Toast.LENGTH_SHORT).show()
             }
         }
-        findViewById<View>(R.id.bottomSendButton).setOnClickListener { picker.launch("*/*") }
-        findViewById<View>(R.id.bottomServerButton).setOnClickListener {
-            mainScroll.post { mainScroll.smoothScrollTo(0, findViewById<View>(R.id.embeddedServerSection).top) }
+        findViewById<View>(R.id.bottomHomeButton).setOnClickListener { showHomePage() }
+        findViewById<View>(R.id.bottomSendButton).setOnClickListener {
+            showHomePage()
+            picker.launch("*/*")
         }
+        findViewById<View>(R.id.bottomServerButton).setOnClickListener { showServerPage() }
         findViewById<View>(R.id.clearHistoryButton).setOnClickListener { refreshLists() }
         refreshHomeServerSummary()
     }
@@ -504,7 +507,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { }
     }
 
-    private fun fetchPcPairingPin(url: String, connectAfterFetch: Boolean) {
+    private fun fetchPcPairingPin(url: String, connectAfterFetch: Boolean, fallbackPin: String = "") {
         val normalized = url.trim().removeSuffix("/")
         if (normalized.isBlank()) {
             status.text = "Enter the PC server URL first"
@@ -521,7 +524,8 @@ class MainActivity : AppCompatActivity() {
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP " + response.code)
                     val body = response.body?.string().orEmpty()
-                    val pin = JSONObject(body).optString("pairing_pin", "").trim()
+                    val fetchedPin = JSONObject(body).optString("pairing_pin", "").trim()
+                    val pin = if (fetchedPin.length == 6 && fetchedPin.all(Char::isDigit)) fetchedPin else fallbackPin.trim()
                     if (pin.length != 6 || !pin.all(Char::isDigit)) error("PC server did not return a valid 6-digit PIN")
                     runOnUiThread {
                         serverPinInput.setText(pin)
@@ -536,6 +540,51 @@ class MainActivity : AppCompatActivity() {
             }
         }.start()
     }
+    private fun refreshPcPairingPin() {
+        val normalized = serverUrlInput.text.toString().trim().removeSuffix("/")
+        if (normalized.isBlank() || isLocalServerUrl(normalized)) {
+            status.text = "Enter a PC server URL first"
+            return
+        }
+        status.text = "Refreshing PC server PIN…"
+        Thread {
+            try {
+                val request = Request.Builder()
+                    .url("$normalized/api/server-pin/refresh")
+                    .post("".toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP " + response.code)
+                    val pin = JSONObject(response.body?.string().orEmpty()).optString("pairing_pin", "").trim()
+                    if (pin.length != 6 || !pin.all(Char::isDigit)) error("PC server returned an invalid PIN")
+                    runOnUiThread {
+                        serverPinInput.setText(pin)
+                        prefs.edit().remove("server_pin").apply()
+                        socket?.close(1000, "PC server PIN refreshed")
+                        socket = null
+                        status.text = "PC server PIN refreshed ✓ Connecting…"
+                        saveAndConnect(normalized, pin)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    status.text = "Could not refresh PC server PIN: " + (e.message ?: "server unavailable")
+                }
+            }
+        }.start()
+    }
+
+    private fun showHomePage() {
+        findViewById<View>(R.id.serverScroll)?.visibility = View.GONE
+        findViewById<View>(R.id.mainScroll)?.visibility = View.VISIBLE
+    }
+
+    private fun showServerPage() {
+        findViewById<View>(R.id.mainScroll)?.visibility = View.GONE
+        findViewById<View>(R.id.serverScroll)?.visibility = View.VISIBLE
+        refreshHomeServerSummary()
+    }
+
     private fun saveAndConnect(url: String, pairingPin: String = serverPinInput.text.toString().trim()) {
         try {
             val normalized = url.trim().removeSuffix("/")
