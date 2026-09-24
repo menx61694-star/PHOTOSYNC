@@ -108,12 +108,14 @@ def _verify_phone_pin(phone_ip: str, pin: str):
     try:
         req = UrlRequest(url, method="POST", headers={"Cache-Control": "no-store"})
         with _direct_opener.open(req, timeout=2.5) as response:
-            cookie = response.headers.get("Set-Cookie", "")
+            raw_cookie = response.headers.get("Set-Cookie", "")
+            cookie = raw_cookie.split(";", 1)[0].strip()
             return (200 <= response.status < 300), cookie
     except Exception:
         try:
             with _direct_opener.open(url, timeout=2.5) as response:
-                cookie = response.headers.get("Set-Cookie", "")
+                raw_cookie = response.headers.get("Set-Cookie", "")
+                cookie = raw_cookie.split(";", 1)[0].strip()
                 return (200 <= response.status < 300), cookie
         except Exception:
             return False, None
@@ -283,6 +285,17 @@ def install(app):
             pin = request.headers.get(_PAIR_PIN_HEADER, "").strip()
             phone_ip = request.headers.get(_PAIR_IP_HEADER, "").strip()
             device_id = request.headers.get(_PAIR_DEVICE_HEADER, "").strip()
+            # Prefer the IP currently attached to the device's live WebSocket.
+            # The browser's cached /connections value can become stale.
+            if device_id:
+                try:
+                    import main as server_main
+                    manager = getattr(server_main, "manager", None)
+                    live_ip = manager.ip_for_device(device_id) if manager and device_id in manager.devices() else ""
+                    if live_ip:
+                        phone_ip = live_ip
+                except Exception:
+                    pass
             if request.method != "POST":
                 return JSONResponse({"detail": "Method not allowed"}, status_code=405)
             if not pin or not phone_ip or not device_id:
