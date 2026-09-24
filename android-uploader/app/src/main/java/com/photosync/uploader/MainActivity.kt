@@ -24,6 +24,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.appcompat.app.AppCompatActivity
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -86,6 +88,33 @@ class MainActivity : AppCompatActivity() {
         if (uris.isNotEmpty()) uris.forEach { upload(it) }
     }
 
+    private val qrScanner = registerForActivityResult(ScanContract()) { result ->
+        val contents = result.contents?.trim().orEmpty()
+        if (contents.isBlank()) return@registerForActivityResult
+        try {
+            val payload = JSONObject(contents)
+            if (payload.optString("photosync") != "pc-server") {
+                status.text = "Unsupported PhotoSync QR code"
+                return@registerForActivityResult
+            }
+            val url = payload.optString("server_url", "").trim().removeSuffix("/")
+            val pin = payload.optString("pairing_pin", "").trim()
+            if (url.isBlank()) {
+                status.text = "QR code does not contain a PC server URL"
+                return@registerForActivityResult
+            }
+            serverUrlInput.setText(url)
+            if (pin.length == 6 && pin.all(Char::isDigit)) {
+                serverPinInput.setText(pin)
+                saveAndConnect(url, pin)
+            } else {
+                fetchPcPairingPin(url, connectAfterFetch = true)
+            }
+        } catch (_: Exception) {
+            status.text = "Invalid PhotoSync QR code"
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -119,6 +148,14 @@ class MainActivity : AppCompatActivity() {
             fetchPcPairingPin(serverUrlInput.text.toString().trim().removeSuffix("/"), connectAfterFetch = false)
         }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
+        findViewById<Button>(R.id.scanQrButton).setOnClickListener {
+            val options = ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("Scan the PhotoSync PC Server QR")
+                .setBeepEnabled(true)
+                .setOrientationLocked(false)
+            qrScanner.launch(options)
+        }
         findViewById<View>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
         findViewById<View>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
         findViewById<Button>(R.id.startEmbeddedButton).setOnClickListener { onEmbeddedStartRequested() }
@@ -672,8 +709,14 @@ class MainActivity : AppCompatActivity() {
                         reconnectSocket(discoveredUrl)
                         status.text = "Local server ready; PC server connected ✓"
                     } else {
-                        saveAndConnect(discoveredUrl, serverPinInput.text.toString().trim())
-                        status.text = "Server found automatically ✓"
+                        val pin = serverPinInput.text.toString().trim()
+                        if (pin.length == 6 && pin.all(Char::isDigit)) {
+                            saveAndConnect(discoveredUrl, pin)
+                            status.text = "Server found automatically ✓"
+                        } else {
+                            fetchPcPairingPin(discoveredUrl, connectAfterFetch = true)
+                            status.text = "Server found; fetching PC pairing PIN…"
+                        }
                     }
                 } else {
                     serverStatus.text = "● Server: Not found"
