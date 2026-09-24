@@ -45,7 +45,7 @@ import java.net.NetworkInterface
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, LocalServerInfoView.Listener {
+class MainActivity : AppCompatActivity() {
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.MINUTES)
@@ -106,19 +106,28 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
 
         findViewById<Button>(R.id.saveServerButton).setOnClickListener {
             val url = serverUrlInput.text.toString().trim().removeSuffix("/")
-            val pin = serverPinInput.text.toString().trim()
             if (url.isBlank()) {
-                status.text = "Enter a server URL or use Find Server"
+                status.text = "Enter a PC server URL or use Find Server"
                 return@setOnClickListener
             }
-            saveAndConnect(url, pin)
+            val pin = serverPinInput.text.toString().trim()
+            if (pin.length == 6 && pin.all(Char::isDigit)) saveAndConnect(url, pin)
+            else fetchPcPairingPin(url, connectAfterFetch = true)
+        }
+        findViewById<Button>(R.id.fetchPinButton).setOnClickListener {
+            fetchPcPairingPin(serverUrlInput.text.toString().trim().removeSuffix("/"), connectAfterFetch = false)
         }
         findViewById<Button>(R.id.findServerButton).setOnClickListener { discoverServer() }
         findViewById<View>(R.id.sentCard).setOnClickListener { mainScroll.smoothScrollTo(0, sentFilesContainer.top) }
         findViewById<View>(R.id.receivedCard).setOnClickListener { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
         findViewById<Button>(R.id.startEmbeddedButton).setOnClickListener { onEmbeddedStartRequested() }
         findViewById<Button>(R.id.stopEmbeddedButton).setOnClickListener { onEmbeddedStopRequested() }
-        findViewById<Button>(R.id.connectServerButton).setOnClickListener { onConnectRequested() }
+        findViewById<Button>(R.id.connectServerButton).setOnClickListener {
+            val url = serverUrlInput.text.toString().trim().removeSuffix("/")
+            if (url.isBlank()) onConnectRequested()
+            else if (serverPinInput.text.toString().trim().let { it.length == 6 && it.all(Char::isDigit) }) saveAndConnect(url)
+            else fetchPcPairingPin(url, connectAfterFetch = true)
+        }
         findViewById<Button>(R.id.disconnectServerButton).setOnClickListener { onDisconnectRequested() }
         findViewById<Button>(R.id.webPairingButton).setOnClickListener { showWebPairingDialog() }
         findViewById<View>(R.id.sendFilesAction).setOnClickListener { picker.launch("*/*") }
@@ -249,7 +258,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         super.onStop()
     }
 
-    override fun onEmbeddedStartRequested() {
+    fun onEmbeddedStartRequested() {
         try {
             connectionEnabled = true
             embeddedStarting = true
@@ -293,7 +302,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         }
     }
 
-    override fun onEmbeddedStopRequested() {
+    fun onEmbeddedStopRequested() {
         try {
             socket?.close(1000, "Embedded server stopped")
             socket = null
@@ -309,7 +318,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         }
     }
 
-    override fun onConnectRequested() {
+    fun onConnectRequested() {
         try {
             connectionEnabled = true
             localServer.stop()
@@ -327,7 +336,7 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         }
     }
 
-    override fun onDisconnectRequested() {
+    fun onDisconnectRequested() {
         connectionEnabled = false
         try { localServer.stop() } catch (_: Throwable) { }
         socket?.close(1000, "User disconnected")
@@ -411,6 +420,38 @@ class MainActivity : AppCompatActivity(), ServerConnectionControls.Listener, Loc
         } catch (_: Exception) { }
     }
 
+    private fun fetchPcPairingPin(url: String, connectAfterFetch: Boolean) {
+        val normalized = url.trim().removeSuffix("/")
+        if (normalized.isBlank()) {
+            status.text = "Enter the PC server URL first"
+            return
+        }
+        if (isLocalServerUrl(normalized)) {
+            status.text = "Embedded Server uses its own PIN"
+            return
+        }
+        status.text = "Fetching PC server pairing PIN…"
+        Thread {
+            try {
+                val request = Request.Builder().url("$normalized/api/server-pin").get().build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP " + response.code)
+                    val body = response.body?.string().orEmpty()
+                    val pin = JSONObject(body).optString("pairing_pin", "").trim()
+                    if (pin.length != 6 || !pin.all(Char::isDigit)) error("PC server did not return a valid 6-digit PIN")
+                    runOnUiThread {
+                        serverPinInput.setText(pin)
+                        status.text = if (connectAfterFetch) "PC pairing PIN received ✓ Connecting…" else "PC pairing PIN received ✓"
+                        if (connectAfterFetch) saveAndConnect(normalized, pin)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    status.text = "Could not get PC pairing PIN: " + (e.message ?: "server unavailable")
+                }
+            }
+        }.start()
+    }
     private fun saveAndConnect(url: String, pairingPin: String = serverPinInput.text.toString().trim()) {
         try {
             val normalized = url.trim().removeSuffix("/")
