@@ -608,6 +608,7 @@ class MainActivity : AppCompatActivity() {
         serverStatus.text = "● Server: Searching LAN…"
         Thread {
             var foundUrl: String? = null
+            var discoveredPin = ""
             try {
                 DatagramSocket().use { udp ->
                     udp.broadcast = true
@@ -624,9 +625,8 @@ class MainActivity : AppCompatActivity() {
                             udp.receive(response)
                             val data = JSONObject(String(response.data, 0, response.length, Charsets.UTF_8))
                             if (data.optString("service") == "PHOTOSYNC") {
-                                foundUrl = "http://${response.address.hostAddress}:${data.optInt("port", 8000)}"
-                                val discoveredPin = data.optString("pairing_pin", "")
-                                if (discoveredPin.length == 6 && discoveredPin.all(Char::isDigit)) serverPinInput.setText(discoveredPin)
+                                foundUrl = "http://" + response.address.hostAddress + ":" + data.optInt("port", 8000)
+                                discoveredPin = data.optString("pairing_pin", "")
                                 break
                             }
                         } catch (_: java.net.SocketTimeoutException) { }
@@ -638,6 +638,9 @@ class MainActivity : AppCompatActivity() {
                 if (!started || !connectionEnabled) return@runOnUiThread
                 val discoveredUrl = foundUrl
                 if (discoveredUrl != null) {
+                    if (discoveredPin.length == 6 && discoveredPin.all(Char::isDigit)) {
+                        serverPinInput.setText(discoveredPin)
+                    }
                     if (forLocalServer) {
                         backendServerUrl = discoveredUrl
                         prefs.edit().putString("backend_server_url", discoveredUrl).apply()
