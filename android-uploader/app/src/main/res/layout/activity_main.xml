@@ -3,29 +3,28 @@
     android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical" android:background="#F5F8FF">
 
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:padding="18dp" android:background="@drawable/ps_top_header">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
-            <TextView android:layout_width="54dp" android:layout_height="54dp" android:gravity="center"
-                android:text="◉" android:textColor="#54A5FF" android:textSize="36sp" android:textStyle="bold"/>
-            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-                android:orientation="vertical" android:paddingStart="8dp">
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="PhotoSync" android:textColor="#FFFFFF" android:textSize="29sp" android:textStyle="bold"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="Share Anything. Anywhere." android:textColor="#B9C8E5" android:textSize="13sp"/>
-            </LinearLayout>
-            <com.photosync.uploader.MenuButton android:id="@+id/menuButton" android:layout_width="48dp" android:layout_height="48dp"
-                android:background="@drawable/ps_menu_light" android:contentDescription="Settings"
-                android:padding="12dp" android:src="@android:drawable/ic_menu_manage" android:tint="#243A68"/>
-        </LinearLayout>
-    </LinearLayout>
-
     <ScrollView android:id="@+id/mainScroll" android:layout_width="match_parent" android:layout_height="0dp"
         android:layout_weight="1" android:fillViewport="true" android:clipToPadding="false">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
             android:orientation="vertical" android:padding="16dp" android:paddingBottom="24dp">
 
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="0dp" android:background="@drawable/ps_top_header">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="18dp" android:gravity="center_vertical">
+                <TextView android:layout_width="54dp" android:layout_height="54dp" android:gravity="center"
+                    android:text="◉" android:textColor="#54A5FF" android:textSize="36sp" android:textStyle="bold"/>
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:orientation="vertical" android:paddingStart="8dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="PhotoSync" android:textColor="#FFFFFF" android:textSize="29sp" android:textStyle="bold"/>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Share Anything. Anywhere." android:textColor="#B9C8E5" android:textSize="13sp"/>
+                </LinearLayout>
+                <com.photosync.uploader.MenuButton android:id="@+id/menuButton" android:layout_width="48dp" android:layout_height="48dp"
+                    android:background="@drawable/ps_menu_light" android:contentDescription="Settings"
+                    android:padding="12dp" android:src="@android:drawable/ic_menu_manage" android:tint="#243A68"/>
+            </LinearLayout>
+        </LinearLayout>
             <LinearLayout android:layout_width="match_parent" android:layout_height="86dp" android:background="@drawable/ps_connected_card"
                 android:gravity="center_vertical" android:padding="14dp">
                 <TextView android:layout_width="14dp" android:layout_height="14dp" android:layout_marginEnd="10dp" android:background="@drawable/ps_green_dot"/>
@@ -96,10 +95,12 @@
                             android:textColor="#FFFFFF" android:textSize="11sp"/>
                     </LinearLayout>
                     <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp"
-                        android:text="Get PIN automatically from the PC server at /api/server-pin" android:textColor="#6D6390" android:textSize="10sp"/>
+                        android:text="Enter the PC PIN manually or use Scan QR / Find Server." android:textColor="#6D6390" android:textSize="10sp"/>
                     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp">
                         <Button android:id="@+id/findServerButton" android:layout_width="0dp" android:layout_height="44dp" android:layout_marginEnd="4dp"
                             android:layout_weight="1" android:background="@drawable/ps_primary_light" android:text="Find Server" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="12sp"/>
+                        <Button android:id="@+id/scanQrButton" android:layout_width="0dp" android:layout_height="44dp" android:layout_marginStart="4dp"
+                            android:layout_weight="1" android:background="@drawable/ps_filter_selected" android:text="Scan QR" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="12sp"/>
                         <Button android:id="@+id/saveServerButton" android:layout_width="0dp" android:layout_height="44dp" android:layout_marginStart="4dp"
                             android:layout_weight="1" android:background="@drawable/ps_primary_light" android:text="Save &amp; Connect" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="12sp"/>
                     </LinearLayout>
