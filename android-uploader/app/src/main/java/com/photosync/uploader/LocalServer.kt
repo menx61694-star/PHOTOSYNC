@@ -89,4 +89,16 @@ class LocalServer(context: Context, port: Int = 18000) {
     } catch (_: Throwable) {
         false
     }
+
+    fun storeAppFile(
+        resolver: android.content.ContentResolver,
+        uri: android.net.Uri,
+        filename: String,
+        onProgress: (Long, Long) -> Unit = { _, _ -> }
+    ): org.json.JSONObject = try {
+        delegate?.storeAppFile(resolver, uri, filename, onProgress)
+            ?: throw IllegalStateException("Embedded server unavailable")
+    } catch (e: Throwable) {
+        throw e
+    }
 }
