@@ -272,18 +272,25 @@ class MainActivity : AppCompatActivity() {
                     val startedOk = appServer.start()
                     val url = if (startedOk) appServer.url() else null
                     runOnUiThread {
-                        embeddedStarting = false
-                        if (startedOk && !url.isNullOrBlank()) {
-                            prefs.edit().putString("server_url", url).apply()
-                            serverUrlInput.setText(url)
-                            serverStatus.text = "Embedded server connected"
-                            status.text = "Embedded server active ✓"
-                        } else {
+                        try {
+                            embeddedStarting = false
+                            if (startedOk && !url.isNullOrBlank()) {
+                                prefs.edit().putString("server_url", url).apply()
+                                serverUrlInput.setText(url)
+                                serverStatus.text = "Embedded server connected"
+                                status.text = "Embedded server active ✓"
+                            } else {
+                                try { appServer.stop() } catch (_: Throwable) { }
+                                serverStatus.text = "● Local Server: Not running"
+                                status.text = "Unable to start embedded server"
+                            }
+                            refreshHomeServerSummary()
+                        } catch (_: Throwable) {
+                            embeddedStarting = false
                             try { appServer.stop() } catch (_: Throwable) { }
                             serverStatus.text = "● Local Server: Not running"
-                            status.text = "Unable to start embedded server"
+                            status.text = "Embedded server UI update failed safely"
                         }
-                        refreshHomeServerSummary()
                     }
                 } catch (t: Throwable) {
                     try { appServer.stop() } catch (_: Throwable) { }
@@ -411,7 +418,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyThemeColor() {
-        val raw = prefs.getString("theme_color", "#BDA4FF") ?: "#BDA4FF"
+        val raw = prefs.getString("theme_color", "#3568EE") ?: "#3568EE"
         try {
             val color = Color.parseColor(raw)
             findViewById<View>(R.id.menuButton)?.backgroundTintList = ColorStateList.valueOf(color)
@@ -496,7 +503,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestBuilder(url: String): Request.Builder =
         Request.Builder().url(url).header("X-PhotoSync-Device-ID", deviceIdentity.id).apply {
-            val pin = serverPinInput.text.toString().trim()
+            val pin = prefs.getString("server_pin", "")?.trim().orEmpty()
             if (pin.isNotBlank() && !isLocalServerUrl(url)) header("X-PhotoSync-Server-PIN", pin)
         }
 
