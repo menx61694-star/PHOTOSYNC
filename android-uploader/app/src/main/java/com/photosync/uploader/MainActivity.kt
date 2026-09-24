@@ -185,6 +185,14 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Server address copied", Toast.LENGTH_SHORT).show()
             }
         }
+        findViewById<Button>(R.id.serverSendFilesButton).setOnClickListener {
+            picker.launch("*/*")
+        }
+        findViewById<Button>(R.id.serverReceiveFilesButton).setOnClickListener {
+            showHomePage()
+            mainScroll.post { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
+            status.text = "Receive area ready"
+        }
         findViewById<View>(R.id.bottomHomeButton).setOnClickListener { showHomePage() }
         findViewById<View>(R.id.bottomSendButton).setOnClickListener {
             showHomePage()
