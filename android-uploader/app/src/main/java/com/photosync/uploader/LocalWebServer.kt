@@ -21,6 +21,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     @Volatile private var running = false
     private var serverSocket: ServerSocket? = null
      @Volatile private var executor: ExecutorService? = null
+    @Volatile private var acceptThread: Thread? = null
     private val random = SecureRandom()
     @Volatile private var pin = generatePin()
     private val sessions = ConcurrentHashMap<String, Long>()
@@ -47,12 +48,16 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             sessions.clear(); webClients.clear(); attempts.clear(); running = true
             executor?.shutdownNow()
             executor = Executors.newCachedThreadPool()
-            executor?.execute { acceptLoop() }
+            val acceptor = Thread({ acceptLoop() }, "PhotoSync-Embedded-Acceptor")
+            acceptThread = acceptor
+            acceptor.start()
             true
         } catch (_: Throwable) {
             running = false
             try { serverSocket?.close() } catch (_: Throwable) {}
             serverSocket = null
+            try { acceptThread?.interrupt() } catch (_: Throwable) {}
+            acceptThread = null
             try { executor?.shutdownNow() } catch (_: Throwable) {}
             executor = null
             false
@@ -65,6 +70,8 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         sessions.clear(); webClients.clear(); attempts.clear()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
+        try { acceptThread?.interrupt() } catch (_: Throwable) {}
+        acceptThread = null
         executor?.shutdownNow()
         executor = null
     }
@@ -112,8 +119,21 @@ class LocalWebServer(private val context: Context, private val port: Int) {
 
     private fun acceptLoop() {
         while (running) {
-            try { serverSocket?.accept()?.let { socket -> executor?.execute { handle(socket) } } }
-            catch (_: Exception) { if (!running) break }
+            try {
+                val socket = serverSocket?.accept() ?: break
+                val workers = executor
+                if (workers != null && !workers.isShutdown) {
+                    try {
+                        workers.execute { handle(socket) }
+                    } catch (_: Throwable) {
+                        try { socket.close() } catch (_: Throwable) { }
+                    }
+                } else {
+                    try { socket.close() } catch (_: Throwable) { }
+                }
+            } catch (_: Exception) {
+                if (!running) break
+            }
         }
     }
 
