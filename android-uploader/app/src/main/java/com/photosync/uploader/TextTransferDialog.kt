@@ -2,6 +2,8 @@ package com.photosync.uploader
 
 import android.app.AlertDialog
 import android.content.Context
+import android.net.Uri
+import android.webkit.MimeTypeMap
 import android.graphics.Color
 import android.view.Gravity
 import android.widget.Button
@@ -16,7 +18,9 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONArray
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class TextTransferButton(context: Context, attrs: android.util.AttributeSet? = null) : androidx.appcompat.widget.AppCompatButton(context, attrs) {
@@ -55,7 +59,11 @@ object TextTransferDialog {
             setBackgroundColor(0xFF172235.toInt())
         }
         val paste = Button(context).apply {
-            text = "Paste from clipboard"
+            text = "Paste text from clipboard"
+            isAllCaps = false
+        }
+        val pasteImage = Button(context).apply {
+            text = "Paste image from clipboard"
             isAllCaps = false
         }
         val box = LinearLayout(context).apply {
@@ -63,12 +71,16 @@ object TextTransferDialog {
             setPadding(20, 8, 20, 0)
             addView(input, LinearLayout.LayoutParams(-1, -2))
             addView(paste, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
+            addView(pasteImage, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 6 })
         }
         paste.setOnClickListener {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
             val clip = clipboard?.primaryClip
             val pasted = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context).toString() else ""
             if (pasted.isBlank()) ToastCompat.show(context, "Clipboard has no text") else input.append(pasted)
+        }
+        pasteImage.setOnClickListener {
+            pasteImageFromClipboard(context, dialog = null)
         }
         val dialog = AlertDialog.Builder(context)
             .setTitle("Text / Clipboard Transfer")
@@ -90,6 +102,93 @@ object TextTransferDialog {
             input.requestFocus()
         }
         dialog.show()
+    }
+
+    private fun pasteImageFromClipboard(context: Context, dialog: AlertDialog?) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        val clip = clipboard?.primaryClip
+        val item = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
+        val uri = item?.uri
+        if (uri == null) {
+            ToastCompat.show(context, "Clipboard has no image")
+            return
+        }
+        Thread {
+            var temp: File? = null
+            try {
+                val mime = context.contentResolver.getType(uri) ?: "image/png"
+                if (!mime.startsWith("image/")) error("Clipboard item is not an image")
+                val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "png"
+                temp = File(context.cacheDir, "photosync_clipboard_" + System.currentTimeMillis() + "." + ext)
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    temp!!.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
+                } ?: error("Unable to read clipboard image")
+                if (!temp!!.isFile || temp!!.length() <= 0L) error("Clipboard image is empty")
+                sendImage(context, temp!!, mime, dialog)
+            } catch (e: Exception) {
+                (context as? android.app.Activity)?.runOnUiThread {
+                    ToastCompat.show(context, "Image paste failed: " + (e.message ?: "unknown error"))
+                }
+                temp?.delete()
+            }
+        }.start()
+    }
+
+    private fun sendImage(context: Context, file: File, mime: String, dialog: AlertDialog?) {
+        val prefs = context.getSharedPreferences("photosync", Context.MODE_PRIVATE)
+        val saved = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        val backend = prefs.getString("backend_server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        val local = saved.contains(":18000")
+        val target = if (local || backend.isBlank()) saved else backend
+        if (target.isBlank()) {
+            file.delete()
+            (context as? android.app.Activity)?.runOnUiThread {
+                ToastCompat.show(context, "Connect to a PhotoSync server first")
+            }
+            return
+        }
+        Thread {
+            try {
+                val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "png"
+                val name = "clipboard_image_" + System.currentTimeMillis() + "." + extension
+                val body = file.asRequestBody(mime.toMediaType())
+                val response = if (local) {
+                    client.newCall(
+                        Request.Builder()
+                            .url("$target/upload?source=app&filename=" + Uri.encode(name))
+                            .header("Content-Type", mime)
+                            .post(body)
+                            .build()
+                    ).execute()
+                } else {
+                    val form = MultipartBody.Builder().setType(MultipartBody.FORM)
+                        .addFormDataPart("source", "app")
+                        .addFormDataPart("filename", name)
+                        .addFormDataPart("file", name, body)
+                        .build()
+                    client.newCall(
+                        Request.Builder()
+                            .url("$target/upload")
+                            .header("X-PhotoSync-Device-ID", DeviceIdentity(context).id)
+                            .post(form)
+                            .build()
+                    ).execute()
+                }
+                response.use {
+                    if (!it.isSuccessful) error("HTTP " + it.code)
+                }
+                (context as? android.app.Activity)?.runOnUiThread {
+                    ToastCompat.show(context, "Image pasted and sent ✓")
+                    dialog?.dismiss()
+                }
+            } catch (e: Exception) {
+                (context as? android.app.Activity)?.runOnUiThread {
+                    ToastCompat.show(context, "Image send failed: " + (e.message ?: "unknown error"))
+                }
+            } finally {
+                file.delete()
+            }
+        }.start()
     }
 
     private fun send(context: Context, text: String, dialog: AlertDialog) {
