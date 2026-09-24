@@ -12,7 +12,7 @@ from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
-from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin
+from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin, revoke_session
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
@@ -157,9 +157,11 @@ def web_clients():
 def web_client_disconnect(web_client_id:str=Form(...)):
     cid=safe_device_id(web_client_id)
     meta=get_web_meta(cid)
+    revoke_session(meta.get('server_session_token',''))
     meta['paired_device_id']=None
     meta.pop('phone_session_cookie',None)
     meta.pop('phone_ip',None)
+    meta.pop('server_session_token',None)
     write_json(web_meta_path(cid),meta)
     return {'ok':True,'web_client_id':cid}
 
@@ -213,7 +215,14 @@ def web_client_pair(request:Request,web_client_id:str=Form(...),device_id:str=Fo
     if did not in manager.devices():raise HTTPException(409,'Selected phone is not connected')
     phone_cookie=getattr(request.state,'photosync_phone_cookie','') or ''
     if not phone_cookie:raise HTTPException(502,'Phone pairing succeeded but its session cookie was not returned')
-    meta=get_web_meta(cid);meta['paired_device_id']=did;meta['phone_session_cookie']=phone_cookie;meta['phone_ip']=manager.ip_for_device(did);write_json(web_meta_path(cid),meta)
+    meta=get_web_meta(cid)
+    old_token=meta.get('server_session_token','')
+    if old_token: revoke_session(old_token)
+    meta['paired_device_id']=did
+    meta['phone_session_cookie']=phone_cookie
+    meta['phone_ip']=manager.ip_for_device(did)
+    meta['server_session_token']=getattr(request.state,'photosync_session_token','')
+    write_json(web_meta_path(cid),meta)
     return {'ok':True,'web_client_id':cid,'paired_device_id':did}
 @app.post('/web-client/unpair')
 def web_client_unpair(web_client_id:str=Form(...)):
