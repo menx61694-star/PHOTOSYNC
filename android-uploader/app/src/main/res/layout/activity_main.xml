@@ -201,7 +201,7 @@
         <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="□&#10;Files" android:textColor="#46546E" android:textSize="12sp"/>
         <TextView android:id="@+id/bottomSendButton" android:layout_width="0dp" android:layout_height="64dp" android:layout_weight="1" android:gravity="center"
             android:text="➤&#10;Send" android:textColor="#FFFFFF" android:textSize="12sp" android:background="@drawable/ps_bottom_send" android:clickable="true" android:focusable="true"/>
-        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="◷&#10;History" android:textColor="#46546E" android:textSize="12sp"/>
+        <TextView android:id="@+id/bottomServerButton" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="▣&#10;Server" android:textColor="#46546E" android:textSize="12sp" android:clickable="true" android:focusable="true"/>
         <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="▣&#10;Devices" android:textColor="#46546E" android:textSize="12sp"/>
     </LinearLayout>
 </LinearLayout>
