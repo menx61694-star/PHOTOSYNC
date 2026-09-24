@@ -66,6 +66,14 @@ def server_pairing_pin():
 def valid_server_pairing_pin(pin: str):
     return secrets.compare_digest((pin or "").strip(), SERVER_PAIRING_PIN)
 
+def refresh_server_pairing_pin():
+    global SERVER_PAIRING_PIN
+    with _lock:
+        SERVER_PAIRING_PIN = f"{secrets.randbelow(900000) + 100000:06d}"
+        _attempts.clear()
+        _sessions.clear()
+        return SERVER_PAIRING_PIN
+
 
 def _client_ip(request: Request):
     return request.client.host if request.client else "unknown"
@@ -231,6 +239,11 @@ def install(app):
     @app.get("/api/server-pin")
     def server_pin_info():
         return {"pin_required": True, "pairing_pin": SERVER_PAIRING_PIN, "message": "Enter this PIN in the PhotoSync Android app when connecting to this PC server"}
+    @app.post("/api/server-pin/refresh")
+    def refresh_server_pin_info():
+        pin = refresh_server_pairing_pin()
+        return {"ok": True, "pairing_pin": pin, "message": "PC server pairing PIN refreshed; existing pairings were cleared"}
+
 
     @app.post("/api/pair")
     def pair_endpoint(request: Request, pin: str, device_ip: str = "", device_id: str = ""):
