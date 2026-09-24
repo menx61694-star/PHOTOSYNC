@@ -631,10 +631,16 @@ class MainActivity : AppCompatActivity() {
         val id = URLEncoder.encode(deviceIdentity.id, "UTF-8")
         val phoneIp = localServer.localIpv4()?.trim().orEmpty()
         val ipParam = if (phoneIp.isNotBlank()) "&device_ip=" + URLEncoder.encode(phoneIp, "UTF-8") else ""
+        // Send the PC pairing PIN in the WebSocket URL as well as the request
+        // header. This keeps QR/manual pairing reliable across HTTP stacks.
+        val pairingPin = prefs.getString("server_pin", "")?.trim().orEmpty()
+        val pinParam = if (pairingPin.length == 6 && pairingPin.all(Char::isDigit)) {
+            "&pairing_pin=" + URLEncoder.encode(pairingPin, "UTF-8")
+        } else ""
         return when {
-            base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws?device_id=$id$ipParam"
-            base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws?device_id=$id$ipParam"
-            else -> "ws://$base/ws?device_id=$id$ipParam"
+            base.startsWith("https://") -> "wss://${base.removePrefix("https://")}/ws?device_id=$id$ipParam$pinParam"
+            base.startsWith("http://") -> "ws://${base.removePrefix("http://")}/ws?device_id=$id$ipParam$pinParam"
+            else -> "ws://$base/ws?device_id=$id$ipParam$pinParam"
         }
     }
 
@@ -843,8 +849,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun upload(uri: Uri) {
-        // App -> PC transfer always uses the external backend. The Android
-        // embedded server may remain selected as the browser/local-server URL.
+        val originalName = displayName(uri)
+
+        // When Embedded Server is selected, files picked on this phone must
+        // also be visible to its connected browser clients. Store them in the
+        // embedded server's app/upload area instead of requiring the external
+        // PC backend.
+        if (localServer.isRunning()) {
+            val progressKey = "embedded_app_${System.nanoTime()}"
+            runOnUiThread { ensureProgressRow(sentFilesContainer, progressKey, "Sending $originalName") }
+            Thread {
+                try {
+                    localServer.storeAppFile(contentResolver, uri, originalName) { sent, total ->
+                        val percent = if (total > 0L) ((sent * 100L) / total).toInt().coerceIn(0, 100) else 0
+                        handler.post {
+                            activeProgressRows[progressKey]
+                                ?.findViewWithTag<ProgressBar>("progress_bar")
+                                ?.progress = percent
+                        }
+                    }
+                    runOnUiThread {
+                        removeProgressRow(progressKey)
+                        status.text = "Sent to Embedded Server ✓ $originalName"
+                    }
+                    refreshLists()
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        removeProgressRow(progressKey)
+                        status.text = "Embedded send failed: ${e.message}"
+                    }
+                }
+            }.start()
+            return
+        }
+
+        // App -> PC transfer uses the external backend.
         val serverUrl = backendServerUrl.ifBlank {
             val current = currentServerUrl()
             if (isLocalServerUrl(current)) "" else current
