@@ -893,7 +893,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val originalName = displayName(uri)
         val progressKey = "app_${System.nanoTime()}"
         runOnUiThread { ensureProgressRow(sentFilesContainer, progressKey, "Sending $originalName") }
 
