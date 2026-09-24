@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
 import qrcode
+from qrcode.image.svg import SvgPathImage
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -191,7 +192,7 @@ def _pc_qr_payload():
 @app.get('/api/server-qr')
 def server_qr():
     qr=qrcode.QRCode(version=None,error_correction=qrcode.constants.ERROR_CORRECT_M,box_size=8,border=4,
-                     image_factory=qrcode.image.svg.SvgPathImage)
+                     image_factory=SvgPathImage)
     qr.add_data(_pc_qr_payload())
     qr.make(fit=True)
     image=qr.make_image()
