@@ -2,15 +2,16 @@ from pathlib import Path
 from uuid import uuid4
 import asyncio
 import http.client
-import re, json, socket, threading, hashlib, secrets
+import re, json, socket, threading, hashlib, secrets, io
 from datetime import datetime, timezone
 from urllib.parse import quote
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
+import qrcode
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin
+from fastapi.responses import FileResponse, Response
+from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
@@ -128,6 +129,76 @@ def devices():
     for d in DEVICES_DIR.iterdir() if DEVICES_DIR.exists() else []:
         if d.is_dir() and safe_device_id(d.name)==d.name:stored.append(d.name)
     return {'devices':sorted(set(stored)|set(manager.devices()))}
+
+@app.get('/web-clients')
+def web_clients():
+    clients=[]
+    for d in WEB_CLIENTS_DIR.iterdir() if WEB_CLIENTS_DIR.exists() else []:
+        if not d.is_dir(): continue
+        cid=safe_device_id(d.name)
+        if not cid: continue
+        meta=get_web_meta(cid)
+        paired=safe_device_id(meta.get('paired_device_id',''))
+        sent=read_json(web_history_path(cid,'sent'),[])
+        received=read_json(web_history_path(cid,'received'),[])
+        clients.append({
+            'web_client_id': cid,
+            'paired_device_id': paired or None,
+            'phone_ip': meta.get('phone_ip'),
+            'created_at': meta.get('created_at'),
+            'sent_count': len(sent),
+            'received_count': len(received),
+            'active': bool(paired),
+        })
+    return {'clients': clients}
+
+@app.post('/web-client/disconnect')
+def web_client_disconnect(web_client_id:str=Form(...)):
+    cid=safe_device_id(web_client_id)
+    meta=get_web_meta(cid)
+    meta['paired_device_id']=None
+    meta.pop('phone_session_cookie',None)
+    meta.pop('phone_ip',None)
+    write_json(web_meta_path(cid),meta)
+    return {'ok':True,'web_client_id':cid}
+
+def _lan_ipv4():
+    try:
+        probe=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        probe.connect(('8.8.8.8',80))
+        ip=probe.getsockname()[0]
+        probe.close()
+        if ip and not ip.startswith('127.'): return ip
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET):
+            ip=info[4][0]
+            if ip and not ip.startswith('127.'): return ip
+    except OSError:
+        pass
+    return '127.0.0.1'
+
+def _pc_qr_payload():
+    host=_lan_ipv4()
+    return json.dumps({
+        'photosync':'pc-server',
+        'version':1,
+        'server_url':f'http://{host}:{APP_PORT}',
+        'pairing_pin':server_pairing_pin(),
+    }, separators=(',',':'))
+
+@app.get('/api/server-qr')
+def server_qr():
+    qr=qrcode.QRCode(version=None,error_correction=qrcode.constants.ERROR_CORRECT_M,box_size=8,border=4,
+                     image_factory=qrcode.image.svg.SvgPathImage)
+    qr.add_data(_pc_qr_payload())
+    qr.make(fit=True)
+    image=qr.make_image()
+    out=io.BytesIO()
+    image.save(out)
+    return Response(out.getvalue(),media_type='image/svg+xml',
+                    headers={'Cache-Control':'no-store'})
 @app.post('/web-client/session')
 def web_client_session():
     client_id=uuid4().hex;d=web_client_dir(client_id);write_json(d/'client.json',{'created_at':datetime.now(timezone.utc).isoformat(),'paired_device_id':None});write_json(d/'sent.json',[]);write_json(d/'received.json',[]);return {'web_client_id':client_id}
