@@ -170,6 +170,7 @@ object TextTransferDialog {
                         Request.Builder()
                             .url("$target/upload")
                             .header("X-PhotoSync-Device-ID", DeviceIdentity(context).id)
+                            .header("X-PhotoSync-Server-PIN", prefs.getString("server_pin", "").orEmpty())
                             .post(form)
                             .build()
                     ).execute()
