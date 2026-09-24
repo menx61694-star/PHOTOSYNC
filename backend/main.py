@@ -297,7 +297,11 @@ async def websocket_endpoint(websocket:WebSocket):
     supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''))
     transport_ip=websocket.client.host if websocket.client else 'unknown'
     advertised_ip=(websocket.query_params.get('device_ip','') or '').strip()
-    host=advertised_ip if _safe_phone_ip(advertised_ip) else transport_ip
+    try:
+        advertised_ok=ipaddress.ip_address(advertised_ip).is_private
+    except ValueError:
+        advertised_ok=False
+    host=advertised_ip if advertised_ok else transport_ip
     device_id=supplied or ip_owner_id(host)
     device_dirs(device_id)
     await manager.connect(websocket,device_id)
