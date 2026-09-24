@@ -76,7 +76,8 @@ class MainActivity : AppCompatActivity() {
     private val receiveRefreshRunnable = object : Runnable {
         override fun run() {
             if (!started) return
-            refreshLists()
+            // Never race a file-list refresh with embedded-server startup.
+            if (!embeddedStarting) refreshLists()
             handler.postDelayed(this, 3000)
         }
     }
@@ -275,10 +276,18 @@ class MainActivity : AppCompatActivity() {
                         try {
                             embeddedStarting = false
                             if (startedOk && !url.isNullOrBlank()) {
-                                prefs.edit().putString("server_url", url).apply()
-                                serverUrlInput.setText(url)
+                                // Keep the PC-server field dedicated to PC servers.
+                                // The embedded URL is exposed in its own section.
+                                prefs.edit().putString("embedded_server_url", url).apply()
                                 serverStatus.text = "Embedded server connected"
                                 status.text = "Embedded server active ✓"
+                                findViewById<TextView>(R.id.showPinButton)?.text =
+                                    "Pairing PIN: " + appServer.currentPin()
+                                handler.postDelayed({
+                                    if (started && !embeddedStarting && appServer.isRunning()) {
+                                        refreshLists()
+                                    }
+                                }, 750)
                             } else {
                                 try { appServer.stop() } catch (_: Throwable) { }
                                 serverStatus.text = "● Local Server: Not running"
@@ -314,7 +323,7 @@ class MainActivity : AppCompatActivity() {
             socket?.close(1000, "Embedded server stopped")
             socket = null
             localServer.stop()
-            prefs.edit().remove("server_url").remove("backend_server_url").remove("server_pin").apply()
+            prefs.edit().remove("embedded_server_url").remove("server_url").remove("backend_server_url").remove("server_pin").apply()
             backendServerUrl = ""
             serverUrlInput.setText("")
             serverStatus.text = "No server selected"
@@ -355,9 +364,18 @@ class MainActivity : AppCompatActivity() {
         status.text = "Disconnected"
     }
 
-    private fun currentServerUrl(): String =
-        prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))
-            ?.trim()?.removeSuffix("/") ?: ""
+    private fun currentServerUrl(): String {
+        // Embedded Server and PC Server have separate UI/state.
+        // When embedded is running, local file operations must use :18000
+        // without ever putting that URL into the PC-server input field.
+        if (localServer.isRunning()) {
+            return localServer.url()?.trim()?.removeSuffix("/") ?: ""
+        }
+        return backendServerUrl.ifBlank {
+            prefs.getString("server_url", serverUrlInput.text.toString().trim().removeSuffix("/"))
+                ?.trim()?.removeSuffix("/") ?: ""
+        }
+    }
 
     private fun isLocalServerUrl(url: String): Boolean {
         val normalized = url.trim().removeSuffix("/")
@@ -748,6 +766,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshLists() {
+        if (embeddedStarting) return
         loadFiles("app", sentFilesContainer, "No files sent from this app yet")
         loadFiles("received", receivedFilesContainer, "No files received from web yet")
     }
