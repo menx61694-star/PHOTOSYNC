@@ -750,11 +750,24 @@ class MainActivity : AppCompatActivity() {
                 val request = requestBuilder("$serverUrl/files?source=$source").get().build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@use
-                    val json = response.body?.string() ?: "[]"
+                    val json = response.body?.string().orEmpty()
+                    // Parse JSON completely off the UI thread. A malformed/empty
+                    // response must never escape into a Handler callback and
+                    // crash the Activity's main thread.
+                    val files = try {
+                        JSONArray(if (json.isBlank()) "[]" else json)
+                    } catch (_: Throwable) {
+                        return@use
+                    }
                     runOnUiThread {
                         if (!started) return@runOnUiThread
-                        renderFiles(JSONArray(json), container, emptyText)
-                        if (source == "received") reconcileReceiveProgress(JSONArray(json))
+                        try {
+                            renderFiles(files, container, emptyText)
+                            if (source == "received") reconcileReceiveProgress(files)
+                        } catch (_: Throwable) {
+                            // Rendering remote/local server data is non-critical;
+                            // keep the Activity alive if a malformed item slips through.
+                        }
                     }
                 }
             } catch (_: Exception) { }
