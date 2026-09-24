@@ -166,30 +166,28 @@ def web_client_disconnect(web_client_id:str=Form(...)):
     return {'ok':True,'web_client_id':cid}
 
 def _lan_ipv4():
-    # If a phone is already connected, ask the OS which local interface it
-    # would use to reach that phone. This avoids advertising a VPN/VM adapter.
-    try:
-        for device_id in manager.devices():
-            phone_ip = manager.ip_for_device(device_id)
-            try:
-                ipaddress.ip_address(phone_ip)
-                probe=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-                try:
-                    probe.connect((phone_ip,18000))
-                    local_ip=probe.getsockname()[0]
-                    if local_ip and not local_ip.startswith('127.'):
-                        return local_ip
-                finally:
-                    probe.close()
-            except (OSError,ValueError):
-                pass
-
-    # Otherwise use the normal default route.
-    try:
-        probe=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    # Prefer the interface used to reach a connected phone.
+    for device_id in manager.devices():
+        phone_ip = manager.ip_for_device(device_id)
         try:
-            probe.connect(('8.8.8.8',80))
-            ip=probe.getsockname()[0]
+            ipaddress.ip_address(phone_ip)
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                probe.connect((phone_ip, 18000))
+                local_ip = probe.getsockname()[0]
+                if local_ip and not local_ip.startswith('127.'):
+                    return local_ip
+            finally:
+                probe.close()
+        except (OSError, ValueError):
+            continue
+
+    # Otherwise use the default network route.
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(('8.8.8.8', 80))
+            ip = probe.getsockname()[0]
             if ip and not ip.startswith('127.'):
                 return ip
         finally:
@@ -198,8 +196,8 @@ def _lan_ipv4():
         pass
 
     try:
-        for info in socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET):
-            ip=info[4][0]
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
             if ip and not ip.startswith('127.'):
                 return ip
     except OSError:
