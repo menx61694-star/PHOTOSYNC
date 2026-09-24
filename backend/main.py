@@ -166,6 +166,47 @@ def web_client_disconnect(web_client_id:str=Form(...)):
     return {'ok':True,'web_client_id':cid}
 
 def _lan_ipv4():
+    # Prefer the PC interface that is actually on the same LAN as a connected
+    # PhotoSync phone. This avoids QR codes containing a VPN/VirtualBox/Wi-Fi
+    # adapter address that the phone cannot reach.
+    connected_ips=[]
+    try:
+        connected_ips=[manager.ip_for_device(d) for d in manager.devices()]
+    except Exception:
+        pass
+
+    candidates=[]
+    try:
+        interfaces=socket.if_nameindex()
+        for _,name in interfaces:
+            try:
+                addrs=socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET)
+            except OSError:
+                addrs=[]
+        # NetworkInterface-style enumeration is not available in Python;
+        # collect addresses from getaddrinfo and the route probe below.
+        for info in socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET):
+            ip=info[4][0]
+            if ip and not ip.startswith('127.') and ip not in candidates:
+                candidates.append(ip)
+    except OSError:
+        pass
+
+    # The route used to reach a connected phone is the strongest signal.
+    for phone_ip in connected_ips:
+        try:
+            phone=ipaddress.ip_address(phone_ip)
+            if phone.version != 4:
+                continue
+            # Try each local candidate with the phone's common LAN prefix.
+            for local_ip in candidates:
+                local=ipaddress.ip_address(local_ip)
+                if local.version == 4 and (int(local) >> 8) == (int(phone) >> 8):
+                    return str(local)
+        except ValueError:
+            continue
+
+    # Normal default-route selection when no phone is connected.
     try:
         probe=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         probe.connect(('8.8.8.8',80))
@@ -174,12 +215,10 @@ def _lan_ipv4():
         if ip and not ip.startswith('127.'): return ip
     except OSError:
         pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET):
-            ip=info[4][0]
-            if ip and not ip.startswith('127.'): return ip
-    except OSError:
-        pass
+
+    for ip in candidates:
+        if ip and not ip.startswith('127.'):
+            return ip
     return '127.0.0.1'
 
 def _pc_qr_payload():
