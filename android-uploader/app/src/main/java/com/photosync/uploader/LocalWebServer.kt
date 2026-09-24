@@ -1,6 +1,8 @@
 package com.photosync.uploader
 
+import android.content.ContentResolver
 import android.content.Context
+import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -289,6 +291,48 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             return json("{\"detail\":\"Incomplete upload\"}", "400 Bad Request")
         }
         return json(fileJson(target, source).toString())
+    }
+
+    fun storeAppFile(
+        resolver: ContentResolver,
+        uri: Uri,
+        filename: String,
+        onProgress: (Long, Long) -> Unit = { _, _ -> }
+    ): JSONObject {
+        val name = safeName(filename)
+        val total = try {
+            resolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getLong(0).takeIf { it >= 0L } ?: -1L else -1L
+            } ?: -1L
+        } catch (_: Exception) { -1L }
+        var target = File(uploads, "${System.currentTimeMillis()}__$name")
+        var n = 1
+        while (target.exists()) target = File(uploads, "${System.currentTimeMillis()}__${n++}__$name")
+        var written = 0L
+        try {
+            resolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "Unable to open file" }
+                target.outputStream().use { out ->
+                    val buffer = ByteArray(256 * 1024)
+                    var nextProgress = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        out.write(buffer, 0, read)
+                        written += read
+                        if (written >= nextProgress || (total > 0L && written >= total)) {
+                            onProgress(written, total)
+                            nextProgress = written + 1024L * 1024L
+                        }
+                    }
+                }
+            }
+            if (total >= 0L && written != total) throw java.io.EOFException("File changed or ended early during embedded upload ($written/$total bytes)")
+            return fileJson(target, "app")
+        } catch (e: Exception) {
+            try { target.delete() } catch (_: Exception) {}
+            throw e
+        }
     }
 
     private fun receiveText(input: InputStream, headers: Map<String, String>): Response {
