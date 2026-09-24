@@ -168,7 +168,12 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.disconnectServerButton).setOnClickListener { onDisconnectRequested() }
         findViewById<Button>(R.id.webPairingButton).setOnClickListener { showWebPairingDialog() }
+        findViewById<Button>(R.id.refreshPinButton).setOnClickListener { refreshEmbeddedPin() }
         findViewById<View>(R.id.sendFilesAction).setOnClickListener { picker.launch("*/*") }
+        findViewById<View>(R.id.receiveFilesAction).setOnClickListener {
+            mainScroll.smoothScrollTo(0, receivedFilesContainer.top)
+            status.text = if (localServer.isRunning()) "Receive area ready — files sent to this phone will appear here" else "Connect to a PC server to receive files"
+        }
         findViewById<View>(R.id.showPinButton).setOnClickListener { showWebPairingDialog() }
         findViewById<View>(R.id.copyAddressButton).setOnClickListener {
             val address = homeServerAddress.text.toString()
@@ -233,6 +238,20 @@ class MainActivity : AppCompatActivity() {
             homeServerAddress.text = "—"
             findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN: —"
             serverStatus.text = "No server selected"
+        }
+    }
+
+    private fun refreshEmbeddedPin() {
+        if (!localServer.isRunning()) {
+            status.text = "Start Embedded Server first"
+            return
+        }
+        val newPin = localServer.refreshPin()
+        if (newPin.length == 6) {
+            findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN: $newPin"
+            status.text = "Embedded server PIN refreshed ✓"
+        } else {
+            status.text = "Unable to refresh Embedded Server PIN"
         }
     }
 

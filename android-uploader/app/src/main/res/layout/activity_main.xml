@@ -69,6 +69,9 @@
                         <Button android:id="@+id/webPairingButton" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="7dp"
                             android:background="@drawable/ps_filter_selected" android:text="Web Pairing" android:textAllCaps="false"
                             android:textColor="#FFFFFF" android:textSize="11sp"/>
+                        <Button android:id="@+id/refreshPinButton" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="7dp"
+                            android:background="@drawable/ps_filter" android:text="Refresh PIN" android:textAllCaps="false"
+                            android:textColor="#26334D" android:textSize="11sp"/>
                         <TextView android:id="@+id/copyAddressButton" android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="7dp"
                             android:gravity="center" android:text="▣" android:textColor="#315BEA" android:textSize="22sp"
                             android:background="@drawable/ps_small_action" android:clickable="true" android:focusable="true"/>
@@ -137,23 +140,31 @@
             <LinearLayout android:layout_width="match_parent" android:layout_height="116dp" android:layout_marginTop="10dp" android:orientation="horizontal">
                 <LinearLayout android:id="@+id/sendFilesAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="5dp" android:layout_weight="1"
                     android:background="@drawable/ps_action_blue_light" android:gravity="center_vertical" android:padding="12dp" android:clickable="true" android:focusable="true">
-                    <TextView android:layout_width="56dp" android:layout_height="56dp" android:gravity="center" android:text="➤" android:textColor="#FFFFFF" android:textSize="27sp" android:background="@drawable/ps_circle_blue"/>
-                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:paddingStart="9dp">
-                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Send Files" android:textColor="#111827" android:textSize="16sp" android:textStyle="bold"/>
-                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Photos, Videos, Documents&#10;and More" android:textColor="#65718A" android:textSize="10sp"/>
+                    <TextView android:layout_width="52dp" android:layout_height="52dp" android:gravity="center" android:text="➤" android:textColor="#FFFFFF" android:textSize="25sp" android:background="@drawable/ps_circle_blue"/>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:paddingStart="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Send Files" android:textColor="#111827" android:textSize="15sp" android:textStyle="bold"/>
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Photos, videos &amp; documents" android:textColor="#65718A" android:textSize="10sp"/>
                     </LinearLayout>
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="›" android:textColor="#315BEA" android:textSize="28sp"/>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="›" android:textColor="#315BEA" android:textSize="26sp"/>
                 </LinearLayout>
-                <com.photosync.uploader.PeerModeButton android:id="@+id/p2pAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="5dp" android:layout_weight="1"
-                    android:background="@drawable/ps_action_green_light" android:gravity="center" android:padding="12dp" android:text="⇄  P2P Transfer&#10;Direct Phone to Phone"
-                    android:textAllCaps="false" android:textColor="#11352B" android:textSize="15sp" android:textStyle="bold"/>
+                <LinearLayout android:id="@+id/receiveFilesAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="5dp" android:layout_weight="1"
+                    android:background="@drawable/ps_action_green_light" android:gravity="center_vertical" android:padding="12dp" android:clickable="true" android:focusable="true">
+                    <TextView android:layout_width="52dp" android:layout_height="52dp" android:gravity="center" android:text="⇩" android:textColor="#11352B" android:textSize="29sp"/>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:paddingStart="8dp">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Receive Files" android:textColor="#11352B" android:textSize="15sp" android:textStyle="bold"/>
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="From PC / Web" android:textColor="#4D7066" android:textSize="10sp"/>
+                    </LinearLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="›" android:textColor="#267461" android:textSize="26sp"/>
+                </LinearLayout>
             </LinearLayout>
 
             <LinearLayout android:layout_width="match_parent" android:layout_height="112dp" android:layout_marginTop="10dp" android:orientation="horizontal">
-                <com.photosync.uploader.TextTransferButton android:id="@+id/textSyncAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="5dp" android:layout_weight="1"
+                <com.photosync.uploader.PeerModeButton android:id="@+id/p2pAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="5dp" android:layout_weight="1"
+                    android:background="@drawable/ps_action_teal_light" android:gravity="center" android:padding="12dp" android:text="⇄  P2P Transfer&#10;Direct Phone to Phone"
+                    android:textAllCaps="false" android:textColor="#11352B" android:textSize="14sp" android:textStyle="bold"/>
+                <com.photosync.uploader.TextTransferButton android:id="@+id/textSyncAction" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="5dp" android:layout_weight="1"
                     android:background="@drawable/ps_action_orange_light" android:gravity="center" android:text="▤  Text Sync&#10;Sync Clipboard Across&#10;Devices"
                     android:textAllCaps="false" android:textColor="#4B2B12" android:textSize="14sp" android:textStyle="bold"/>
-                <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
             </LinearLayout>
 
             <LinearLayout android:layout_width="match_parent" android:layout_height="196dp" android:layout_marginTop="16dp" android:orientation="horizontal">
