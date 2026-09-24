@@ -230,7 +230,7 @@ class MainActivity : AppCompatActivity() {
                 homeServerAddress.text = backendServerUrl
                 embeddedAddress.text = "Web address: unavailable"
                 embeddedStatus.text = "Stopped"
-                findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN: —"
+                findViewById<TextView>(R.id.showPinButton)?.text = "PIN: —"
                 serverStatus.text = "PC server connected"
                 startButton.isEnabled = true
                 stopButton.isEnabled = false
@@ -263,7 +263,7 @@ class MainActivity : AppCompatActivity() {
         }
         val newPin = localServer.refreshPin()
         if (newPin.length == 6) {
-            findViewById<TextView>(R.id.showPinButton)?.text = "Pairing PIN: $newPin"
+            findViewById<TextView>(R.id.showPinButton)?.text = "PIN: $newPin"
             status.text = "Embedded server PIN refreshed ✓"
         } else {
             status.text = "Unable to refresh Embedded Server PIN"
@@ -353,7 +353,7 @@ class MainActivity : AppCompatActivity() {
                                 serverStatus.text = "Embedded server connected"
                                 status.text = "Embedded server active ✓"
                                 findViewById<TextView>(R.id.showPinButton)?.text =
-                                    "Pairing PIN: " + appServer.currentPin()
+                                    "PIN: " + appServer.currentPin()
                                 handler.postDelayed({
                                     if (started && !embeddedStarting && appServer.isRunning()) {
                                         refreshLists()
