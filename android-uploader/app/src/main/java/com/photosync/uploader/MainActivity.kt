@@ -184,6 +184,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         findViewById<View>(R.id.bottomSendButton).setOnClickListener { picker.launch("*/*") }
+        findViewById<View>(R.id.bottomServerButton).setOnClickListener {
+            mainScroll.post { mainScroll.smoothScrollTo(0, findViewById<View>(R.id.embeddedServerSection).top) }
+        }
         findViewById<View>(R.id.clearHistoryButton).setOnClickListener { refreshLists() }
         refreshHomeServerSummary()
     }
