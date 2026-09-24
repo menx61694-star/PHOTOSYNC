@@ -213,7 +213,12 @@ object TextTransferDialog {
                         .addFormDataPart("filename", name)
                         .addFormDataPart("file", name, fileBody)
                         .build()
-                    client.newCall(Request.Builder().url("$target/upload").header("X-PhotoSync-Device-ID", DeviceIdentity(context).id).post(form).build()).execute()
+                    client.newCall(
+                        Request.Builder().url("$target/upload")
+                            .header("X-PhotoSync-Device-ID", DeviceIdentity(context).id)
+                            .header("X-PhotoSync-Server-PIN", prefs.getString("server_pin", "").orEmpty())
+                            .post(form).build()
+                    ).execute()
                 }
                 response.use {
                     if (!it.isSuccessful) error("HTTP " + it.code)
