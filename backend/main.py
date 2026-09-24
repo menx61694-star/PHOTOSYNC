@@ -226,7 +226,15 @@ def web_client_pair(request:Request,web_client_id:str=Form(...),device_id:str=Fo
     return {'ok':True,'web_client_id':cid,'paired_device_id':did}
 @app.post('/web-client/unpair')
 def web_client_unpair(web_client_id:str=Form(...)):
-    cid=safe_device_id(web_client_id);meta=get_web_meta(cid);meta['paired_device_id']=None;meta.pop('phone_session_cookie',None);meta.pop('phone_ip',None);write_json(web_meta_path(cid),meta);return {'ok':True}
+    cid=safe_device_id(web_client_id)
+    meta=get_web_meta(cid)
+    revoke_session(meta.get('server_session_token',''))
+    meta['paired_device_id']=None
+    meta.pop('phone_session_cookie',None)
+    meta.pop('phone_ip',None)
+    meta.pop('server_session_token',None)
+    write_json(web_meta_path(cid),meta)
+    return {'ok':True}
 @app.get('/web-client/files')
 def web_client_files(web_client_id:str,kind:str='sent'):
     if kind not in {'sent','received'}:raise HTTPException(400,'invalid kind')
