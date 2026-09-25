@@ -252,7 +252,12 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         }
         val encoded = URLEncoder.encode(file.name, "UTF-8").replace("+", "%20")
         return JSONObject().apply {
-            put("filename", name); put("stored_filename", file.name); put("url", "/files/$source/$encoded"); put("download_url", "/files/$source/$encoded?download=1"); put("size", file.length()); put("type", type)
+            val contentType = when (ext) {
+                "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; "bmp" -> "image/bmp"
+                "mp4" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"; "mov" -> "video/quicktime"; "avi" -> "video/x-msvideo"
+                "pdf" -> "application/pdf"; "txt" -> "text/plain"; else -> "application/octet-stream"
+            }
+            put("filename", name); put("stored_filename", file.name); put("url", "/files/$source/$encoded"); put("download_url", "/files/$source/$encoded?download=1"); put("size", file.length()); put("type", type); put("content_type", contentType)
         }
     }
 
@@ -269,6 +274,13 @@ class LocalWebServer(private val context: Context, private val port: Int) {
 
     /** Direct filesystem listing for the Android app UI; avoids a self-HTTP/auth round trip. */
     fun listFilesForApp(source: String): JSONArray = fileArray(source)
+
+    /** Direct file lookup for Android-local preview; web clients still use the HTTP route. */
+    fun localFileForApp(source: String, storedName: String): File? {
+        val dir = if (source == "app") uploads else downloads
+        val safe = safeName(storedName)
+        return dir.listFiles()?.firstOrNull { it.isFile && it.name == safe }
+    }
 
     private fun file(path: String, download: Boolean): Response {
         val bits = path.removePrefix("/files/").split('/', limit = 2)
