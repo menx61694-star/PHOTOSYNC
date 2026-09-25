@@ -703,17 +703,18 @@ class MainActivity : AppCompatActivity() {
                         val enteredMatches = currentPin == pairingPin
                         runOnUiThread {
                             if (!started || !connectionEnabled || backendServerUrl != normalized) return@runOnUiThread
+                            if (!enteredMatches) {
+                                serverPinInput.setText(currentPin)
+                                status.text = "PC server PIN is incorrect — current PIN loaded"
+                                return@runOnUiThread
+                            }
                             serverPinInput.setText(currentPin)
                             prefs.edit()
                                 .putString("server_url", normalized)
                                 .putString("backend_server_url", normalized)
                                 .putString("server_pin", currentPin)
                                 .apply()
-                            status.text = if (enteredMatches) {
-                                "PC server PIN verified ✓ Connecting…"
-                            } else {
-                                "PC server PIN changed — current PIN loaded ✓ Connecting…"
-                            }
+                            status.text = "PC server PIN verified ✓ Connecting…"
                             reconnectSocket(normalized)
                             refreshLists()
                         }
