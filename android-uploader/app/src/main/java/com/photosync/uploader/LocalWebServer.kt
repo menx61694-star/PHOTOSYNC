@@ -49,10 +49,12 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     fun start(): Boolean {
         if (running) return true
         return try {
+            // Bind explicitly to IPv4 so the PC server can always reach the
+            // embedded endpoint over the phone's LAN IPv4 address.
             val s = ServerSocket()
             s.reuseAddress = true
             s.receiveBufferSize = 1024 * 1024
-            s.bind(java.net.InetSocketAddress(port), 50)
+            s.bind(java.net.InetSocketAddress("0.0.0.0", port), 50)
             serverSocket = s
             // Keep the PIN stable across stop/start. Explicit refreshPin() rotates it.
             sessions.clear(); webClients.clear(); attempts.clear(); pairRequests.clear(); running = true
