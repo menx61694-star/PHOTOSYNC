@@ -108,6 +108,13 @@ class LocalServer(context: Context, port: Int = 18000) {
         null
     }
 
+    data class PairRequestInfo(val id: String, val ip: String, val createdAt: Long)
+    fun pendingPairRequests(): List<PairRequestInfo> = try {
+        delegate?.pendingPairRequests()?.map { PairRequestInfo(it.id, it.ip, it.createdAt) } ?: emptyList()
+    } catch (_: Throwable) { emptyList() }
+    fun approvePairRequest(id: String): Boolean = try { delegate?.approvePairRequest(id) == true } catch (_: Throwable) { false }
+    fun rejectPairRequest(id: String): Boolean = try { delegate?.rejectPairRequest(id) == true } catch (_: Throwable) { false }
+
     fun storeAppFile(
         resolver: android.content.ContentResolver,
         uri: android.net.Uri,
