@@ -147,11 +147,15 @@ def _create_session(pin: str, phone_ip: str, device_id: str, request: Request):
         if len(attempts) >= MAX_ATTEMPTS_PER_MINUTE:
             raise HTTPException(429, "Too many PIN attempts; try again later")
 
-    verified, phone_cookie = _verify_phone_pin(phone_ip, pin)
-    if not verified:
+    state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
+    if state != "approved":
         with _lock:
             _attempts[key].append(now)
-        raise HTTPException(403, "Invalid PIN or phone is unreachable")
+        if state == "invalid":
+            raise HTTPException(403, "Invalid phone PIN")
+        if state == "pending":
+            raise HTTPException(202, request_id or "Pairing request pending")
+        raise HTTPException(503, "Phone embedded server could not be reached")
 
     with _lock:
         _attempts[key].clear()
