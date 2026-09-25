@@ -67,6 +67,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainScroll: ScrollView
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
+    @Volatile private var socketGeneration = 0L
+    private val reconnectRunnable = Runnable {
+        if (started && connectionEnabled && !embeddedStarting && backendServerUrl.isNotBlank() && socket == null) {
+            connectSocket(backendServerUrl)
+        }
+    }
     private val deviceIdentity by lazy { DeviceIdentity(this) }
     private val thumbnailCache by lazy { ThumbnailCache(cacheDir) }
     private val localServer by lazy { (application as PhotoSyncApplication).localServer }
@@ -334,6 +340,7 @@ class MainActivity : AppCompatActivity() {
         connectionEnabled = true
         applyThemeColor()
         // Server activation is now explicit: the user chooses Embedded or PC server.
+        handler.removeCallbacks(reconnectRunnable)
         handler.removeCallbacks(receiveRefreshRunnable)
         handler.postDelayed(receiveRefreshRunnable, 3000)
         refreshHomeServerSummary()
@@ -342,6 +349,9 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         started = false
         handler.removeCallbacks(receiveRefreshRunnable)
+        handler.removeCallbacks(reconnectRunnable)
+        connectionEnabled = false
+        socketGeneration++
         socket?.close(1000, "App stopped")
         socket = null
         serverStatus.text = "● Server: Disconnected"
@@ -443,6 +453,8 @@ class MainActivity : AppCompatActivity() {
 
     fun onDisconnectRequested() {
         connectionEnabled = false
+        handler.removeCallbacks(reconnectRunnable)
+        socketGeneration++
         try { localServer.stop() } catch (_: Throwable) { }
         socket?.close(1000, "User disconnected")
         socket = null
@@ -587,6 +599,8 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         serverPinInput.setText(pin)
                         prefs.edit().remove("server_pin").apply()
+                        handler.removeCallbacks(reconnectRunnable)
+                        socketGeneration++
                         socket?.close(1000, "PC server PIN refreshed")
                         socket = null
                         status.text = "PC server PIN refreshed ✓ Connecting…"
@@ -674,14 +688,20 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun reconnectSocket(serverUrl: String = backendServerUrl.ifBlank { currentServerUrl() }) {
+        handler.removeCallbacks(reconnectRunnable)
+        socketGeneration++
         socket?.close(1000, "Reconnect")
         socket = null
-        if (started && connectionEnabled && serverUrl.isNotBlank() && !isLocalServerUrl(serverUrl)) connectSocket(serverUrl)
+        if (started && connectionEnabled && serverUrl.isNotBlank() && !isLocalServerUrl(serverUrl)) {
+            connectSocket(serverUrl)
+        }
     }
 
     private fun connectSocket(serverUrl: String = backendServerUrl.ifBlank { currentServerUrl() }) {
         val base = serverUrl.trim().removeSuffix("/")
         if (!started || !connectionEnabled || base.isBlank() || isLocalServerUrl(base)) return
+        handler.removeCallbacks(reconnectRunnable)
+        val generation = ++socketGeneration
         socket?.cancel()
         serverStatus.text = "● Server: Connecting…"
         socket = client.newWebSocket(requestBuilder(wsUrl(base)).build(), object : WebSocketListener() {
@@ -732,29 +752,70 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                val isCurrent = socket === webSocket && generation == socketGeneration
                 runOnUiThread {
-                    if (socket === webSocket) socket = null
-                    serverStatus.text = "● Server: Disconnected"
+                    if (isCurrent) {
+                        socket = null
+                        serverStatus.text = "● Server: Disconnected"
+                    }
                 }
-                scheduleReconnect()
+                if (isCurrent) scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
+                val isCurrent = socket === webSocket && generation == socketGeneration
+                val authFailure = response?.code == 401 || response?.code == 403 ||
+                    t.message?.contains("pairing PIN", ignoreCase = true) == true
                 runOnUiThread {
-                    if (socket === webSocket) socket = null
-                    serverStatus.text = "● Server: Disconnected"
-                    if (started && connectionEnabled) status.text = "Connection failed — retrying…"
+                    if (isCurrent) {
+                        socket = null
+                        serverStatus.text = "● Server: Disconnected"
+                        if (started && connectionEnabled) {
+                            status.text = if (authFailure) "PC pairing PIN rejected — refreshing…" else "Connection failed — retrying…"
+                        }
+                    }
                 }
-                scheduleReconnect()
+                if (isCurrent) {
+                    if (authFailure) refreshPcPairingPinAndReconnect(base) else scheduleReconnect()
+                }
             }
         })
     }
 
-    private fun scheduleReconnect() {
-        if (!started || !connectionEnabled || embeddedStarting) return
-        handler.postDelayed({
-            if (started && connectionEnabled && !embeddedStarting && backendServerUrl.isNotBlank()) connectSocket(backendServerUrl)
-        }, 2000)
+    private fun scheduleReconnect(delayMs: Long = 2000L) {
+        if (!started || !connectionEnabled || embeddedStarting || backendServerUrl.isBlank()) return
+        handler.removeCallbacks(reconnectRunnable)
+        handler.postDelayed(reconnectRunnable, delayMs)
+    }
+
+    private fun refreshPcPairingPinAndReconnect(base: String) {
+        if (!started || !connectionEnabled) return
+        handler.removeCallbacks(reconnectRunnable)
+        Thread {
+            try {
+                val request = Request.Builder().url("$base/api/server-pin").get().build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP " + response.code)
+                    val pin = JSONObject(response.body?.string().orEmpty()).optString("pairing_pin", "").trim()
+                    if (pin.length != 6 || !pin.all(Char::isDigit)) error("Invalid PC pairing PIN")
+                    prefs.edit().putString("server_pin", pin).apply()
+                    runOnUiThread {
+                        if (started && connectionEnabled && backendServerUrl == base) {
+                            serverPinInput.setText(pin)
+                            status.text = "Current PC PIN received — reconnecting…"
+                            reconnectSocket(base)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (started && connectionEnabled) {
+                        status.text = "PC PIN refresh failed — retrying connection"
+                        scheduleReconnect(3000L)
+                    }
+                }
+            }
+        }.start()
     }
 
     private fun localBroadcastAddresses(): List<InetAddress> {
