@@ -3,6 +3,7 @@ import os
 import secrets
 import threading
 import time
+import asyncio
 from collections import defaultdict, deque
 from urllib.parse import urlencode
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
@@ -389,6 +390,14 @@ def install(app):
             except Exception:
                 pass
             state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
+            # Starting the embedded server is asynchronous on Android. Give it
+            # a short readiness window before declaring the phone unreachable.
+            if state == "unreachable":
+                for _ in range(12):
+                    await asyncio.sleep(0.25)
+                    state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
+                    if state != "unreachable":
+                        break
             if state == "pending" and request_id:
                 web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
                 if not web_client_id:
