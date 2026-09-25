@@ -678,27 +678,59 @@ class MainActivity : AppCompatActivity() {
                 else status.text = "Android local server connected ✓"
                 return
             }
-            backendServerUrl = normalized
             if (pairingPin.length != 6 || !pairingPin.all(Char::isDigit)) {
                 status.text = "Enter the 6-digit PC server pairing PIN"
                 serverPinInput.requestFocus()
                 return
             }
-            prefs.edit()
-                .putString("server_url", normalized)
-                .putString("backend_server_url", normalized)
-                .putString("server_pin", pairingPin)
-                .apply()
+
+            backendServerUrl = normalized
             serverUrlInput.setText(normalized)
-            status.text = "Connecting…"
-            reconnectSocket(normalized)
-            refreshLists()
+            status.text = "Verifying current PC server PIN…"
+
+            // The PC server PIN can change after the server restarts or after a
+            // manual refresh. Never trust a stale value from preferences/QR.
+            Thread {
+                try {
+                    val request = Request.Builder().url("$normalized/api/server-pin?ts=" + System.currentTimeMillis()).get().build()
+                    client.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) error("HTTP " + response.code)
+                        val currentPin = JSONObject(response.body?.string().orEmpty())
+                            .optString("pairing_pin", "").trim()
+                        if (currentPin.length != 6 || !currentPin.all(Char::isDigit)) {
+                            error("PC server did not return a valid 6-digit PIN")
+                        }
+                        val enteredMatches = currentPin == pairingPin
+                        runOnUiThread {
+                            if (!started || !connectionEnabled || backendServerUrl != normalized) return@runOnUiThread
+                            serverPinInput.setText(currentPin)
+                            prefs.edit()
+                                .putString("server_url", normalized)
+                                .putString("backend_server_url", normalized)
+                                .putString("server_pin", currentPin)
+                                .apply()
+                            status.text = if (enteredMatches) {
+                                "PC server PIN verified ✓ Connecting…"
+                            } else {
+                                "PC server PIN changed — current PIN loaded ✓ Connecting…"
+                            }
+                            reconnectSocket(normalized)
+                            refreshLists()
+                        }
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        if (started && connectionEnabled && backendServerUrl == normalized) {
+                            status.text = "PC server PIN verification failed: " + (e.message ?: "server unavailable")
+                        }
+                    }
+                }
+            }.start()
         } catch (t: Throwable) {
             serverStatus.text = "● Server: Connection failed"
             status.text = "Invalid or unavailable server URL"
         }
     }
-
     private fun wsUrl(baseUrl: String = currentServerUrl()): String {
         val base = baseUrl.trim().removeSuffix("/")
         val id = URLEncoder.encode(deviceIdentity.id, "UTF-8")
