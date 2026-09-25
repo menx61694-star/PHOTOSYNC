@@ -62,6 +62,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var homeServerAddress: TextView
     private lateinit var sentFilesContainer: LinearLayout
     private lateinit var receivedFilesContainer: LinearLayout
+    private lateinit var serverSentFilesContainer: LinearLayout
+    private lateinit var serverReceivedFilesContainer: LinearLayout
     private lateinit var mainScroll: ScrollView
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
@@ -122,6 +124,8 @@ class MainActivity : AppCompatActivity() {
         serverPinInput = findViewById(R.id.serverPinInput)
         sentFilesContainer = findViewById(R.id.sentFilesContainer)
         receivedFilesContainer = findViewById(R.id.receivedFilesContainer)
+        serverSentFilesContainer = findViewById(R.id.serverSentFilesContainer)
+        serverReceivedFilesContainer = findViewById(R.id.serverReceivedFilesContainer)
         mainScroll = findViewById(R.id.mainScroll)
         homeServerAddress = findViewById(R.id.homeServerAddress)
 
@@ -646,8 +650,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestBuilder(url: String): Request.Builder =
         Request.Builder().url(url).header("X-PhotoSync-Device-ID", deviceIdentity.id).apply {
-            val pin = prefs.getString("server_pin", "")?.trim().orEmpty()
-            if (pin.isNotBlank() && !isLocalServerUrl(url)) header("X-PhotoSync-Server-PIN", pin)
+            if (isLocalServerUrl(url)) {
+                val token = localServer.localAppToken()
+                if (token.isNotBlank()) header("X-PhotoSync-Local-Token", token)
+            } else {
+                val pin = prefs.getString("server_pin", "")?.trim().orEmpty()
+                if (pin.isNotBlank()) header("X-PhotoSync-Server-PIN", pin)
+            }
         }
 
     private fun reconnectSocket(serverUrl: String = backendServerUrl.ifBlank { currentServerUrl() }) {
@@ -930,8 +939,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshLists() {
         if (embeddedStarting) return
+        if (localServer.isRunning()) {
+            refreshEmbeddedServerLists()
+            return
+        }
         loadFiles("app", sentFilesContainer, "No files sent from this app yet")
         loadFiles("received", receivedFilesContainer, "No files received from web yet")
+    }
+
+    private fun refreshEmbeddedServerLists() {
+        Thread {
+            val sent = localServer.listFilesForApp("app")
+            val received = localServer.listFilesForApp("received")
+            runOnUiThread {
+                if (!started) return@runOnUiThread
+                renderFiles(sent, sentFilesContainer, "No files sent from this app yet")
+                renderFiles(received, receivedFilesContainer, "No files received from web yet")
+                renderFiles(sent, serverSentFilesContainer, "No files sent from this phone yet")
+                renderFiles(received, serverReceivedFilesContainer, "No files received from web yet")
+            }
+        }.start()
     }
 
     private fun loadFiles(source: String, container: LinearLayout, emptyText: String) {
