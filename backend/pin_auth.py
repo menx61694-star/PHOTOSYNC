@@ -99,43 +99,53 @@ def _safe_phone_ip(value: str):
     return str(ip)
 
 
-def _phone_request(phone_ip: str, method: str, path: str):
-    phone_ip = _safe_phone_ip(phone_ip)
-    if not phone_ip:
+def _phone_request(phone_ips, method: str, path: str):
+    if isinstance(phone_ips, str):
+        phone_ips = [phone_ips]
+    candidates = []
+    for value in phone_ips or []:
+        ip = _safe_phone_ip(value)
+        if ip and ip not in candidates:
+            candidates.append(ip)
+    if not candidates:
         return None, None, None
-    url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}{path}"
     last_error = None
-    # Embedded-server startup can race the browser pairing request. Retry once.
-    for attempt in range(2):
-        try:
-            req = UrlRequest(url, method=method, headers={"Cache-Control": "no-store"})
-            with _direct_opener.open(req, timeout=3.0) as response:
-                raw = response.read().decode("utf-8", "replace")
-                raw_cookie = response.headers.get("Set-Cookie", "")
-                cookie = raw_cookie.split(";", 1)[0].strip()
-                return response.status, raw, cookie
-        except HTTPError as exc:
+    # The WebSocket peer address and Android's advertised Wi-Fi address can
+    # differ when VPN/virtual interfaces are present. Try both before declaring
+    # the embedded server unreachable.
+    for phone_ip in candidates:
+        url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}{path}"
+        for attempt in range(2):
             try:
-                raw = exc.read().decode("utf-8", "replace")
-            except Exception:
-                raw = str(exc)
-            raw_cookie = exc.headers.get("Set-Cookie", "") if exc.headers else ""
-            cookie = raw_cookie.split(";", 1)[0].strip()
-            return exc.code, raw, cookie
-        except Exception as exc:
-            last_error = exc
-            if attempt == 0:
-                time.sleep(0.25)
-                continue
-            return None, str(last_error), None
+                req = UrlRequest(url, method=method, headers={"Cache-Control": "no-store"})
+                with _direct_opener.open(req, timeout=3.0) as response:
+                    raw = response.read().decode("utf-8", "replace")
+                    raw_cookie = response.headers.get("Set-Cookie", "")
+                    cookie = raw_cookie.split(";", 1)[0].strip()
+                    return response.status, raw, cookie
+            except HTTPError as exc:
+                try:
+                    raw = exc.read().decode("utf-8", "replace")
+                except Exception:
+                    raw = str(exc)
+                raw_cookie = exc.headers.get("Set-Cookie", "") if exc.headers else ""
+                cookie = raw_cookie.split(";", 1)[0].strip()
+                return exc.code, raw, cookie
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0:
+                    time.sleep(0.25)
+                    continue
     return None, str(last_error or "phone embedded server unavailable"), None
-def _verify_phone_pin(phone_ip: str, pin: str):
-    phone_ip = _safe_phone_ip(phone_ip)
+def _verify_phone_pin(phone_ips, pin: str):
     pin = (pin or "").strip()
-    if not phone_ip or not pin.isdigit() or len(pin) != 6:
+    candidates = phone_ips if isinstance(phone_ips, (list, tuple)) else [phone_ips]
+    if not any(_safe_phone_ip(value) for value in candidates):
+        return "invalid", None, None
+    if not pin.isdigit() or len(pin) != 6:
         return "invalid", None, None
     query = urlencode({"pin": pin})
-    status, raw, cookie = _phone_request(phone_ip, "POST", f"/api/pair?{query}")
+    status, raw, cookie = _phone_request(candidates, "POST", f"/api/pair?{query}")
     if status is None:
         return "unreachable", None, None
     try:
@@ -376,15 +386,18 @@ def install(app):
             pin = request.headers.get(_PAIR_PIN_HEADER, "").strip()
             phone_ip = request.headers.get(_PAIR_IP_HEADER, "").strip()
             device_id = request.headers.get(_PAIR_DEVICE_HEADER, "").strip()
-            # Prefer the IP currently attached to the device's live WebSocket.
-            # The browser's cached /connections value can become stale.
+            # Prefer the live WebSocket peer, but retain Android's
+            # advertised Wi-Fi address as a fallback when VPN/virtual routing
+            # makes the peer address unsuitable for HTTP back to the phone.
+            phone_ips = [phone_ip]
             if device_id:
                 try:
                     import main as server_main
                     manager = getattr(server_main, "manager", None)
-                    live_ip = manager.ip_for_device(device_id) if manager and device_id in manager.devices() else ""
-                    if live_ip:
-                        phone_ip = live_ip
+                    if manager and device_id in manager.devices():
+                        live_ip = manager.ip_for_device(device_id)
+                        advertised_ip = manager.advertised_ip_for_device(device_id)
+                        phone_ips = [live_ip, advertised_ip]
                 except Exception:
                     pass
             if request.method != "POST":
@@ -394,7 +407,7 @@ def install(app):
             # Embedded Server and PC Server are intentionally separate.
             # Browser pairing must never start the Embedded Server implicitly.
             # The user must start it explicitly from the Android Server page.
-            state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
+            state, phone_cookie, request_id = _verify_phone_pin(phone_ips, pin)
             if state == "pending" and request_id:
                 web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
                 if not web_client_id:
