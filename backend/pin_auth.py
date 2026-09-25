@@ -382,7 +382,7 @@ def install(app):
             # Browser pairing must never start the Embedded Server implicitly.
             # The user must start it explicitly from the Android Server page.
             state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
-                        if state == "pending" and request_id:
+            if state == "pending" and request_id:
                 web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
                 if not web_client_id:
                     return JSONResponse({"detail": "Web client ID is required"}, status_code=400)
