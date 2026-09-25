@@ -179,56 +179,71 @@
                 android:textColor="#68748A" android:textSize="12sp"/>
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:text="Embedded Server" android:textColor="#101827" android:textSize="21sp" android:textStyle="bold"/>
                 <LinearLayout android:id="@+id/embeddedServerSection" android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp" android:orientation="vertical" android:background="@drawable/ps_action_blue_light" android:padding="12dp">
+                    android:layout_marginTop="12dp" android:orientation="vertical" android:background="@drawable/ps_white_card" android:padding="14dp">
                     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
                         <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
                             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Embedded Server"
-                                android:textColor="#111827" android:textSize="15sp" android:textStyle="bold"/>
+                                android:textColor="#111827" android:textSize="17sp" android:textStyle="bold"/>
                             <TextView android:id="@+id/embeddedServerStatus" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                                android:text="Stopped" android:textColor="#68748A" android:textSize="11sp"/>
+                                android:layout_marginTop="2dp" android:text="Stopped" android:textColor="#68748A" android:textSize="11sp"/>
                         </LinearLayout>
-                        <Button android:id="@+id/startEmbeddedButton" android:layout_width="wrap_content" android:layout_height="42dp"
+                        <Button android:id="@+id/startEmbeddedButton" android:layout_width="0dp" android:layout_height="42dp" android:layout_weight="1"
                             android:background="@drawable/ps_primary_light" android:text="Start" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="12sp"/>
-                        <Button android:id="@+id/stopEmbeddedButton" android:layout_width="wrap_content" android:layout_height="42dp" android:layout_marginStart="6dp"
+                        <Button android:id="@+id/stopEmbeddedButton" android:layout_width="0dp" android:layout_height="42dp" android:layout_marginStart="6dp" android:layout_weight="1"
                             android:background="@drawable/ps_filter" android:text="Stop" android:textAllCaps="false" android:textColor="#26334D" android:textSize="12sp"/>
                     </LinearLayout>
+
                     <TextView android:id="@+id/embeddedAddressText" android:layout_width="match_parent" android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp" android:text="Web address: unavailable" android:textColor="#42516C" android:textSize="11sp"/>
-                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:gravity="center_vertical">
-                        <TextView android:id="@+id/showPinButton" android:layout_width="142dp" android:layout_height="48dp"
-                            android:gravity="center" android:paddingStart="8dp" android:paddingEnd="8dp" android:text="PIN: —"
-                            android:maxLines="1" android:ellipsize="end"
-                            android:textColor="#315BEA" android:textSize="13sp" android:textStyle="bold" android:background="@drawable/ps_pin_box"
-                            android:clickable="true" android:focusable="true"/>
-                        <Button android:id="@+id/webPairingButton" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="7dp"
+                        android:layout_marginTop="12dp" android:text="Web address: unavailable" android:textColor="#42516C" android:textSize="12sp"
+                        android:maxLines="1" android:ellipsize="end"/>
+
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:gravity="center_vertical">
+                        <TextView android:id="@+id/showPinButton" android:layout_width="0dp" android:layout_height="50dp" android:layout_weight="1"
+                            android:gravity="center" android:paddingStart="10dp" android:paddingEnd="10dp" android:text="Pairing PIN: —"
+                            android:maxLines="1" android:ellipsize="end" android:textColor="#315BEA" android:textSize="13sp" android:textStyle="bold"
+                            android:background="@drawable/ps_pin_box" android:clickable="true" android:focusable="true"/>
+                        <Button android:id="@+id/webPairingButton" android:layout_width="0dp" android:layout_height="50dp" android:layout_marginStart="7dp" android:layout_weight="1"
                             android:background="@drawable/ps_filter_selected" android:text="Web Pairing" android:textAllCaps="false"
                             android:textColor="#FFFFFF" android:textSize="11sp"/>
-                        <Button android:id="@+id/refreshPinButton" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginStart="7dp"
-                            android:background="@drawable/ps_filter" android:text="Refresh PIN" android:textAllCaps="false"
-                            android:textColor="#26334D" android:textSize="11sp"/>
-                        <TextView android:id="@+id/copyAddressButton" android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="7dp"
-                            android:gravity="center" android:text="▣" android:textColor="#315BEA" android:textSize="22sp"
+                    </LinearLayout>
+
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp">
+                        <Button android:id="@+id/refreshPinButton" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1"
+                            android:background="@drawable/ps_filter" android:text="Refresh PIN" android:textAllCaps="false" android:textColor="#26334D" android:textSize="11sp"/>
+                        <TextView android:id="@+id/copyAddressButton" android:layout_width="0dp" android:layout_height="44dp" android:layout_marginStart="7dp" android:layout_weight="1"
+                            android:gravity="center" android:text="Copy Address" android:textColor="#315BEA" android:textSize="11sp"
                             android:background="@drawable/ps_small_action" android:clickable="true" android:focusable="true"/>
                     </LinearLayout>
                 </LinearLayout>
 
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp"
-                android:orientation="horizontal">
-                <Button android:id="@+id/serverSendFilesButton" android:layout_width="0dp" android:layout_height="52dp"
-                    android:layout_weight="1" android:layout_marginEnd="5dp" android:background="@drawable/ps_primary_light"
-                    android:text="Send Files" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="13sp"/>
-                <Button android:id="@+id/serverReceiveFilesButton" android:layout_width="0dp" android:layout_height="52dp"
-                    android:layout_weight="1" android:layout_marginStart="5dp" android:background="@drawable/ps_filter"
-                    android:text="Receive Files" android:textAllCaps="false" android:textColor="#26334D" android:textSize="13sp"/>
-            </LinearLayout>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="18dp"
+                    android:text="File Transfer" android:textColor="#101827" android:textSize="20sp" android:textStyle="bold"/>
 
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp"
-                android:text="Files sent from the PC/browser appear in Received. Use Send Files to send from this phone."
-                android:textColor="#68748A" android:textSize="11sp"/>
-        </LinearLayout>
-    </ScrollView>
-</FrameLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="9dp"
+                    android:orientation="horizontal">
+                    <Button android:id="@+id/serverSendFilesButton" android:layout_width="0dp" android:layout_height="50dp"
+                        android:layout_weight="1" android:layout_marginEnd="5dp" android:background="@drawable/ps_primary_light"
+                        android:text="Send Files" android:textAllCaps="false" android:textColor="#FFFFFF" android:textSize="13sp"/>
+                    <Button android:id="@+id/serverReceiveFilesButton" android:layout_width="0dp" android:layout_height="50dp"
+                        android:layout_weight="1" android:layout_marginStart="5dp" android:background="@drawable/ps_filter"
+                        android:text="Receive Files" android:textAllCaps="false" android:textColor="#26334D" android:textSize="13sp"/>
+                </LinearLayout>
 
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
+                    android:text="Phone → Browser" android:textColor="#17213A" android:textSize="15sp" android:textStyle="bold"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp"
+                    android:text="Files selected with Send Files appear here and are immediately available to paired browsers."
+                    android:textColor="#68748A" android:textSize="10sp"/>
+                <LinearLayout android:id="@+id/serverSentFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" android:orientation="vertical" android:background="@drawable/ps_white_card" android:padding="8dp"/>
+
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp"
+                    android:text="Browser / PC → Phone" android:textColor="#17213A" android:textSize="15sp" android:textStyle="bold"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp"
+                    android:text="Files uploaded from the browser appear here after transfer."
+                    android:textColor="#68748A" android:textSize="10sp"/>
+                <LinearLayout android:id="@+id/serverReceivedFilesContainer" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" android:orientation="vertical" android:background="@drawable/ps_white_card" android:padding="8dp"/>
     <LinearLayout android:layout_width="match_parent" android:layout_height="72dp" android:background="@drawable/ps_bottom_nav" android:gravity="center_vertical">
         <TextView android:id="@+id/bottomHomeButton" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="⌂&#10;Home" android:textColor="#315BEA" android:textSize="12sp"/>
         <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center" android:text="□&#10;Files" android:textColor="#46546E" android:textSize="12sp"/>
