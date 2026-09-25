@@ -79,6 +79,15 @@ class MainActivity : AppCompatActivity() {
     private var socket: WebSocket? = null
     private var backendServerUrl = ""
     private var started = false
+    private var activePairDialogId: String? = null
+    private val pairRequestPoll = object : Runnable {
+        override fun run() {
+            if (!started) return
+            if (localServer.isRunning()) checkPairRequests()
+            handler.postDelayed(this, 2000)
+        }
+    }
+
     private var connectionEnabled = true
     private var discoveryInProgress = false
     @Volatile private var embeddedStarting = false
@@ -280,6 +289,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun checkPairRequests() {
+        val requests = localServer.pendingPairRequests()
+        if (requests.isEmpty()) {
+            activePairDialogId = null
+            return
+        }
+        val req = requests.first()
+        if (activePairDialogId == req.id) return
+        activePairDialogId = req.id
+        AlertDialog.Builder(this)
+            .setTitle("Web Pairing Request")
+            .setMessage("A browser at " + req.ip + " wants to connect to this phone.\n\nAllow this device to access PhotoSync files?")
+            .setNegativeButton("Reject") { _, _ ->
+                localServer.rejectPairRequest(req.id)
+                activePairDialogId = null
+            }
+            .setPositiveButton("Allow") { _, _ ->
+                if (localServer.approvePairRequest(req.id)) {
+                    status.text = "Web device paired ✓"
+                    Toast.makeText(this, "Web device connected", Toast.LENGTH_SHORT).show()
+                } else {
+                    status.text = "Pairing request expired"
+                }
+                activePairDialogId = null
+                refreshHomeServerSummary()
+            }
+            .setOnCancelListener { activePairDialogId = null }
+            .show()
+    }
+
     private fun refreshEmbeddedPin() {
         if (!localServer.isRunning()) {
             status.text = "Start Embedded Server first"
@@ -343,12 +382,14 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacks(reconnectRunnable)
         handler.removeCallbacks(receiveRefreshRunnable)
         handler.postDelayed(receiveRefreshRunnable, 3000)
+        handler.postDelayed(pairRequestPoll, 1500)
         refreshHomeServerSummary()
     }
 
     override fun onStop() {
         started = false
         handler.removeCallbacks(receiveRefreshRunnable)
+        handler.removeCallbacks(pairRequestPoll)
         handler.removeCallbacks(reconnectRunnable)
         connectionEnabled = false
         socketGeneration++
