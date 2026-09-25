@@ -19,6 +19,7 @@ _sessions = {}
 _attempts = defaultdict(deque)
 _lock = threading.Lock()
 _direct_opener = build_opener(ProxyHandler({}))
+_pending_web_pairs = {}
 
 
 def _cleanup(now=None):
@@ -97,29 +98,43 @@ def _safe_phone_ip(value: str):
     return str(ip)
 
 
+def _phone_request(phone_ip: str, method: str, path: str):
+    phone_ip = _safe_phone_ip(phone_ip)
+    if not phone_ip:
+        return None, None, None
+    url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}{path}"
+    try:
+        req = UrlRequest(url, method=method, headers={"Cache-Control": "no-store"})
+        with _direct_opener.open(req, timeout=2.5) as response:
+            raw = response.read().decode("utf-8", "replace")
+            raw_cookie = response.headers.get("Set-Cookie", "")
+            cookie = raw_cookie.split(";", 1)[0].strip()
+            return response.status, raw, cookie
+    except Exception as exc:
+        return None, str(exc), None
+
+
 def _verify_phone_pin(phone_ip: str, pin: str):
     phone_ip = _safe_phone_ip(phone_ip)
     pin = (pin or "").strip()
     if not phone_ip or not pin.isdigit() or len(pin) != 6:
-        return False, None
-
+        return "invalid", None, None
     query = urlencode({"pin": pin})
-    url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}/api/pair?{query}"
+    status, raw, cookie = _phone_request(phone_ip, "POST", f"/api/pair?{query}")
+    if status is None:
+        return "unreachable", None, None
     try:
-        req = UrlRequest(url, method="POST", headers={"Cache-Control": "no-store"})
-        with _direct_opener.open(req, timeout=2.5) as response:
-            raw_cookie = response.headers.get("Set-Cookie", "")
-            cookie = raw_cookie.split(";", 1)[0].strip()
-            return (200 <= response.status < 300), cookie
+        import json
+        payload = json.loads(raw or "{}")
     except Exception:
-        try:
-            with _direct_opener.open(url, timeout=2.5) as response:
-                raw_cookie = response.headers.get("Set-Cookie", "")
-                cookie = raw_cookie.split(";", 1)[0].strip()
-                return (200 <= response.status < 300), cookie
-        except Exception:
-            return False, None
-
+        payload = {}
+    if status == 403:
+        return "invalid", None, None
+    if 200 <= status < 300:
+        if payload.get("pending") and payload.get("request_id"):
+            return "pending", None, str(payload["request_id"])
+        return "approved", cookie, None
+    return "unreachable", None, None
 
 def _create_session(pin: str, phone_ip: str, device_id: str, request: Request):
     now = time.time()
