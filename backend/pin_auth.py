@@ -6,6 +6,7 @@ import time
 from collections import defaultdict, deque
 from urllib.parse import urlencode
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
+from urllib.error import HTTPError
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -110,6 +111,14 @@ def _phone_request(phone_ip: str, method: str, path: str):
             raw_cookie = response.headers.get("Set-Cookie", "")
             cookie = raw_cookie.split(";", 1)[0].strip()
             return response.status, raw, cookie
+    except HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8", "replace")
+        except Exception:
+            raw = str(exc)
+        raw_cookie = exc.headers.get("Set-Cookie", "") if exc.headers else ""
+        cookie = raw_cookie.split(";", 1)[0].strip()
+        return exc.code, raw, cookie
     except Exception as exc:
         return None, str(exc), None
 
