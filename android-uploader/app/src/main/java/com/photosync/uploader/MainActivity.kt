@@ -1055,6 +1055,8 @@ class MainActivity : AppCompatActivity() {
         val path = item.optString("url", "")
         val size = item.optLong("size", 0L)
         val type = item.optString("type", "file")
+        val source = if (path.contains("/received/")) "received" else "app"
+        val storedName = item.optString("stored_filename", "")
         val mime = item.optString("content_type", "application/octet-stream")
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6))
@@ -1063,7 +1065,9 @@ class MainActivity : AppCompatActivity() {
         if (type == "image") {
             val fullUrl = buildFileUrl(path)
             val image = ImageView(this).apply { layoutParams = LinearLayout.LayoutParams(dp(72), dp(72)); scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF2B2B2B.toInt()); contentDescription = name; tag = "thumbnail:$fullUrl" }
-            row.addView(image); loadThumbnail(fullUrl, image)
+            row.addView(image)
+            val localFile = if (localServer.isRunning() && storedName.isNotBlank()) localServer.localFileForApp(source, storedName) else null
+            loadThumbnail(fullUrl, image, localFile)
         } else row.addView(TextView(this).apply { text = "📄"; textSize = 30f; gravity = Gravity.CENTER; layoutParams = LinearLayout.LayoutParams(dp(72), dp(72)) })
         row.addView(TextView(this).apply { text = "$name\n${formatSize(size)}"; textSize = 14f; setPadding(dp(12), 0, dp(8), 0); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
         return row
@@ -1075,15 +1079,21 @@ class MainActivity : AppCompatActivity() {
         return "$base${if (path.startsWith("/")) path else "/$path"}"
     }
 
-    private fun loadThumbnail(url: String, image: ImageView) {
+    private fun loadThumbnail(url: String, image: ImageView, localFile: File? = null) {
         Thread {
             val cached = thumbnailCache.get(url)
             if (cached != null) { runOnUiThread { if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(cached) }; return@Thread }
             try {
-                client.newCall(requestBuilder(url).get().build()).execute().use { response ->
-                    if (!response.isSuccessful) return@use
-                    val bytes = response.body?.bytes() ?: return@use
-                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return@use
+                val bitmap = if (localFile != null) {
+                    BitmapFactory.decodeFile(localFile.absolutePath, BitmapFactory.Options().apply { inSampleSize = 4 })
+                } else {
+                    client.newCall(requestBuilder(url).get().build()).execute().use { response ->
+                        if (!response.isSuccessful) return@use null
+                        val bytes = response.body?.bytes() ?: return@use null
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 4 })
+                    }
+                }
+                if (bitmap != null) {
                     thumbnailCache.put(url, bitmap)
                     runOnUiThread { if (image.tag == "thumbnail:$url" && image.parent != null) image.setImageBitmap(bitmap) }
                 }
@@ -1097,8 +1107,22 @@ class MainActivity : AppCompatActivity() {
         val imageView = ImageView(this).apply { adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER; setPadding(dp(8), dp(8), dp(8), dp(8)); minimumHeight = dp(220); contentDescription = name }
         val dialog = AlertDialog.Builder(this).setTitle(name).setView(imageView).setNegativeButton("Close", null).setPositiveButton("Download") { _, _ -> downloadFile(path, name, mime) }.create()
         dialog.show()
+        val source = if (path.contains("/received/")) "received" else "app"
+        val storedName = path.substringAfterLast("/").let { java.net.URLDecoder.decode(it, "UTF-8") }
+        val localFile = if (localServer.isRunning()) localServer.localFileForApp(source, storedName) else null
         Thread {
-            try { client.newCall(requestBuilder(fullUrl).get().build()).execute().use { response -> if (response.isSuccessful) { val bytes = response.body?.bytes(); val bitmap = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }; if (bitmap != null) runOnUiThread { if (dialog.isShowing) imageView.setImageBitmap(bitmap) } } } } catch (_: Exception) { }
+            try {
+                val bitmap = if (localFile != null) {
+                    BitmapFactory.decodeFile(localFile.absolutePath)
+                } else {
+                    client.newCall(requestBuilder(fullUrl).get().build()).execute().use { response ->
+                        if (!response.isSuccessful) return@use null
+                        val bytes = response.body?.bytes() ?: return@use null
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
+                }
+                if (bitmap != null) runOnUiThread { if (dialog.isShowing) imageView.setImageBitmap(bitmap) }
+            } catch (_: Exception) { }
         }.start()
     }
 
