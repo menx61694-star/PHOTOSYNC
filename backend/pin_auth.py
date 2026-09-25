@@ -397,8 +397,16 @@ def install(app):
                 return JSONResponse({"detail": "Phone embedded server could not be reached"}, status_code=503)
             if state != "approved":
                 return JSONResponse({"detail": "Phone pairing failed"}, status_code=502)
-            token = _create_session(pin, phone_ip, device_id, request)
-            request.state.photosync_phone_cookie = phone_cookie or session_phone_cookie(token)
+            now = time.time()
+            token = secrets.token_urlsafe(32)
+            with _lock:
+                _sessions[token] = {
+                    "expires": now + SESSION_TTL_SECONDS,
+                    "device_id": device_id,
+                    "phone_cookie": phone_cookie or "",
+                    "phone_ip": phone_ip,
+                }
+            request.state.photosync_phone_cookie = phone_cookie or ""
             request.state.photosync_session_token = token
             response = await call_next(request)
             if response.status_code < 400:
