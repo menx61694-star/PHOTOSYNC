@@ -774,6 +774,7 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         }
+                        "prepare_web_pairing" -> { Thread { val ok = try { localServer.start() } catch (_: Throwable) { false }; runOnUiThread { status.text = if (ok) "Embedded server ready for web pairing ✓" else "Unable to start Embedded Server for web pairing"; refreshHomeServerSummary() } }.start() }
                         "file_uploaded" -> {
                             val source = data.optString("source", "unknown")
                             val targetDevice = data.optString("device_id", "")
