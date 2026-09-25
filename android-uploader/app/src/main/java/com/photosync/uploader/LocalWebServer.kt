@@ -54,8 +54,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             s.receiveBufferSize = 1024 * 1024
             s.bind(java.net.InetSocketAddress(port), 50)
             serverSocket = s
-            pin = generatePin()
-            appToken = generateToken()
+            // Keep the PIN stable across stop/start. Explicit refreshPin() rotates it.
             sessions.clear(); webClients.clear(); attempts.clear(); pairRequests.clear(); running = true
             executor?.shutdownNow()
             executor = Executors.newCachedThreadPool()
