@@ -410,7 +410,7 @@ def install(app):
                 }
                 return JSONResponse({"paired": False, "pending": True, "request_id": request_id, "message": "Approve the pairing request on the phone"}, status_code=202)
             if state == "invalid":
-                return JSONResponse({"detail": "Invalid phone PIN"}, status_code=403)
+                return JSONResponse({"detail": "Invalid phone PIN", "code": "PHONE_PIN_INVALID", "hint": "This field requires the selected phone's Embedded Server PIN, not the PC Server PIN."}, status_code=403)
             if state == "unreachable":
                 return JSONResponse({"detail": "Phone embedded server could not be reached"}, status_code=503)
             if state != "approved":
