@@ -99,6 +99,33 @@ class LocalWebServer(private val context: Context, private val port: Int) {
 
     fun localIpv4(): String? {
         return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            // Prefer the actual Wi-Fi interface. NetworkInterface enumeration can
+            // return VPN/virtual/tunnel IPv4 addresses first, producing a URL that
+            // the PC cannot reach even though the embedded socket is listening.
+            if (cm != null) {
+                val wifiNetworks = cm.allNetworks.filter { network ->
+                    cm.getNetworkCapabilities(network)
+                        ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+                }
+                for (network in wifiNetworks) {
+                    val links = cm.getLinkProperties(network)?.linkAddresses.orEmpty()
+                    val address = links.asSequence()
+                        .map { it.address }
+                        .filterIsInstance<Inet4Address>()
+                        .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                    if (address != null) return address.hostAddress
+                }
+                val active = cm.activeNetwork
+                val links = active?.let { cm.getLinkProperties(it)?.linkAddresses }.orEmpty()
+                val address = links.asSequence()
+                    .map { it.address }
+                    .filterIsInstance<Inet4Address>()
+                    .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                if (address != null) return address.hostAddress
+            }
+            // Fallback for devices where ConnectivityManager does not expose
+            // usable link properties.
             val ns = NetworkInterface.getNetworkInterfaces()
             while (ns.hasMoreElements()) {
                 val n = ns.nextElement()
@@ -106,7 +133,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                 val as_ = n.inetAddresses
                 while (as_.hasMoreElements()) {
                     val a = as_.nextElement()
-                    if (a is Inet4Address && !a.isLoopbackAddress) return a.hostAddress
+                    if (a is Inet4Address && !a.isLoopbackAddress && !a.isLinkLocalAddress) return a.hostAddress
                 }
             }
             null
