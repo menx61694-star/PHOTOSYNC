@@ -102,6 +102,12 @@ class LocalServer(context: Context, port: Int = 18000) {
         org.json.JSONArray()
     }
 
+    fun localFileForApp(source: String, storedName: String): java.io.File? = try {
+        delegate?.localFileForApp(source, storedName)
+    } catch (_: Throwable) {
+        null
+    }
+
     fun storeAppFile(
         resolver: android.content.ContentResolver,
         uri: android.net.Uri,
