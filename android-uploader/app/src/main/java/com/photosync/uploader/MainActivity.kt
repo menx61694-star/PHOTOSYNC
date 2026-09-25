@@ -193,9 +193,19 @@ class MainActivity : AppCompatActivity() {
             picker.launch("*/*")
         }
         findViewById<Button>(R.id.serverReceiveFilesButton).setOnClickListener {
-            showHomePage()
-            mainScroll.post { mainScroll.smoothScrollTo(0, receivedFilesContainer.top) }
-            status.text = "Receive area ready"
+            if (!localServer.isRunning()) {
+                status.text = "Start Embedded Server first"
+                return@setOnClickListener
+            }
+            refreshEmbeddedServerLists()
+            findViewById<View>(R.id.serverScroll)?.post {
+                findViewById<View>(R.id.serverReceivedFilesContainer)?.requestFocus()
+                findViewById<ScrollView>(R.id.serverScroll)?.smoothScrollTo(
+                    0,
+                    findViewById<View>(R.id.serverReceivedFilesContainer)?.top ?: 0
+                )
+            }
+            status.text = "Received files refreshed"
         }
         findViewById<View>(R.id.bottomHomeButton).setOnClickListener { showHomePage() }
         findViewById<View>(R.id.bottomSendButton).setOnClickListener {
