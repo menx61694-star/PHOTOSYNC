@@ -238,6 +238,7 @@ _PUBLIC_EXACT = {
     "/api/logout",
     "/web-client/session",
     "/web-client/pair",
+    "/web-client/pair-status",
     "/web-client/disconnect",
     "/connections",
 }
@@ -248,6 +249,7 @@ _SESSION_QUERY = "session"
 _PAIR_PIN_HEADER = "X-PhotoSync-Pair-PIN"
 _PAIR_IP_HEADER = "X-PhotoSync-Device-IP"
 _PAIR_DEVICE_HEADER = "X-PhotoSync-Device-ID"
+_PAIR_CLIENT_HEADER = "X-PhotoSync-Web-Client-ID"
 
 
 def _request_session(request: Request):
@@ -275,6 +277,54 @@ def install(app):
     def refresh_server_pin_info():
         pin = refresh_server_pairing_pin()
         return {"ok": True, "pairing_pin": pin, "message": "PC server pairing PIN refreshed; existing pairings were cleared"}
+
+    @app.get("/web-client/pair-status")
+    def web_client_pair_status(request: Request, request_id: str, web_client_id: str, device_id: str):
+        pending = _pending_web_pairs.get(request_id)
+        if not pending or pending.get("device_id") != device_id or pending.get("web_client_id") != web_client_id:
+            raise HTTPException(404, "Pairing request not found")
+        status, raw, cookie = _phone_request(pending["phone_ip"], "GET", f"/api/pair/status?id={request_id}")
+        if status is None:
+            return JSONResponse({"paired": False, "pending": True}, status_code=202)
+        try:
+            import json
+            payload = json.loads(raw or "{}")
+        except Exception:
+            payload = {}
+        if status == 403:
+            _pending_web_pairs.pop(request_id, None)
+            return JSONResponse({"paired": False, "pending": False, "message": payload.get("message", "Pairing rejected")}, status_code=403)
+        if status == 200 and payload.get("paired") and cookie:
+            now = time.time()
+            token = secrets.token_urlsafe(32)
+            with _lock:
+                _sessions[token] = {
+                    "expires": now + SESSION_TTL_SECONDS,
+                    "device_id": pending["device_id"],
+                    "phone_cookie": cookie,
+                    "phone_ip": pending["phone_ip"],
+                }
+                _attempts.clear()
+            try:
+                import main as server_main
+                meta = server_main.get_web_meta(web_client_id)
+                old_token = meta.get("server_session_token", "")
+                if old_token:
+                    revoke_session(old_token)
+                meta["paired_device_id"] = pending["device_id"]
+                meta["phone_session_cookie"] = cookie
+                meta["phone_ip"] = pending["phone_ip"]
+                meta["server_session_token"] = token
+                server_main.write_json(server_main.web_meta_path(web_client_id), meta)
+            except Exception:
+                revoke_session(token)
+                raise HTTPException(500, "Could not save web pairing session")
+            _pending_web_pairs.pop(request_id, None)
+            response = JSONResponse({"paired": True, "session_token": token, "device_id": pending["device_id"], "expires_in_seconds": SESSION_TTL_SECONDS})
+            _set_session_cookie(response, token)
+            _set_session_header(response, token)
+            return response
+        return JSONResponse({"paired": False, "pending": True}, status_code=202)
 
     @app.post("/api/pair")
     def pair_endpoint(request: Request, pin: str, device_ip: str = "", device_id: str = ""):
@@ -319,11 +369,36 @@ def install(app):
                 return JSONResponse({"detail": "Method not allowed"}, status_code=405)
             if not pin or not phone_ip or not device_id:
                 return JSONResponse({"detail": "Phone PIN, device IP and device ID are required"}, status_code=400)
+            # The authenticated PC↔phone WebSocket can start the phone's
+            # embedded HTTP server on demand. This removes the old
+            # "server must already be running" dead-end.
             try:
-                token = _create_session(pin, phone_ip, device_id, request)
-            except HTTPException as exc:
-                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-            request.state.photosync_phone_cookie = session_phone_cookie(token)
+                import main as server_main
+                manager = getattr(server_main, "manager", None)
+                if manager and device_id in manager.devices():
+                    await manager.send_to_device(device_id, {"type": "prepare_web_pairing"})
+            except Exception:
+                pass
+            state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
+            if state == "pending" and request_id:
+                web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
+                if not web_client_id:
+                    return JSONResponse({"detail": "Web client ID is required"}, status_code=400)
+                _pending_web_pairs[request_id] = {
+                    "device_id": device_id,
+                    "phone_ip": phone_ip,
+                    "web_client_id": web_client_id,
+                    "created_at": time.time(),
+                }
+                return JSONResponse({"paired": False, "pending": True, "request_id": request_id, "message": "Approve the pairing request on the phone"}, status_code=202)
+            if state == "invalid":
+                return JSONResponse({"detail": "Invalid phone PIN"}, status_code=403)
+            if state == "unreachable":
+                return JSONResponse({"detail": "Phone embedded server could not be reached"}, status_code=503)
+            if state != "approved":
+                return JSONResponse({"detail": "Phone pairing failed"}, status_code=502)
+            token = _create_session(pin, phone_ip, device_id, request)
+            request.state.photosync_phone_cookie = phone_cookie or session_phone_cookie(token)
             request.state.photosync_session_token = token
             response = await call_next(request)
             if response.status_code < 400:
