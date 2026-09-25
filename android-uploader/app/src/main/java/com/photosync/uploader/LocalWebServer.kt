@@ -493,7 +493,37 @@ class LocalWebServer(private val context: Context, private val port: Int) {
 <script>
 const el=id=>document.getElementById(id);
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function pair(passed){let p=(passed||el('pin').value).trim();if(!/^\d{6}$/.test(p)){el('msg').textContent='Enter a 6-digit PIN';return false}let r=await fetch('/api/pair?pin='+encodeURIComponent(p),{method:'POST',cache:'no-store'});let d=await r.json().catch(()=>({}));if(!r.ok){el('msg').textContent=d.message||'Pairing failed';return false}el('gate').classList.add('hidden');el('app').classList.remove('hidden');load();return true}
+let pairPoll=null;
+async function pair(passed){
+  let p=(passed||el('pin').value).trim();
+  if(!/^\d{6}$/.test(p)){el('msg').textContent='Enter a 6-digit PIN';return false}
+  let r=await fetch('/api/pair?pin='+encodeURIComponent(p),{method:'POST',cache:'no-store'});
+  let d=await r.json().catch(()=>({}));
+  if(!r.ok && r.status!==202){el('msg').textContent=d.message||'Pairing failed';return false}
+  if(d.pending){
+    el('msg').textContent='Pairing request sent to phone. Approve it on the phone…';
+    if(pairPoll)clearInterval(pairPoll);
+    pairPoll=setInterval(async()=>{
+      try{
+        let sr=await fetch('/api/pair/status?id='+encodeURIComponent(d.request_id),{cache:'no-store'});
+        let sd=await sr.json().catch(()=>({}));
+        if(sd.paired){
+          clearInterval(pairPoll);pairPoll=null;
+          el('msg').textContent='Paired ✓';
+          el('gate').classList.add('hidden');el('app').classList.remove('hidden');load();
+        }else if(sr.status===403){
+          clearInterval(pairPoll);pairPoll=null;
+          el('msg').textContent=sd.message||'Pairing rejected';
+        }else if(sr.status===404){
+          clearInterval(pairPoll);pairPoll=null;
+          el('msg').textContent='Pairing request expired';
+        }
+      }catch(e){}
+    },1000);
+    return false
+  }
+  el('gate').classList.add('hidden');el('app').classList.remove('hidden');load();return true
+}
 el('pair').onclick=()=>pair();el('pairTop').onclick=()=>pair(el('pinTop').value);el('pin').onkeydown=e=>{if(e.key==='Enter')pair()};async function copyText(v){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(v)}else{let t=document.createElement('textarea');t.value=v;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();document.execCommand('copy');t.remove()}el('textMsg').textContent='Copied ✓'}catch(e){el('textMsg').textContent='Copy failed'}}
 el('copy').onclick=()=>copyText(location.origin);el('qr').onclick=showQr;
 async function jsonResponse(response,name){
