@@ -308,7 +308,7 @@ def install(app):
         pending = _pending_web_pairs.get(request_id)
         if not pending or pending.get("device_id") != device_id or pending.get("web_client_id") != web_client_id:
             raise HTTPException(404, "Pairing request not found")
-        status, raw, cookie = _phone_request(pending["phone_ip"], "GET", f"/api/pair/status?id={request_id}")
+        status, raw, cookie = _phone_request(pending.get("phone_ips", [pending["phone_ip"]]), "GET", f"/api/pair/status?id={request_id}")
         if status is None:
             return JSONResponse({"paired": False, "pending": True}, status_code=202)
         try:
@@ -414,7 +414,8 @@ def install(app):
                     return JSONResponse({"detail": "Web client ID is required"}, status_code=400)
                 _pending_web_pairs[request_id] = {
                     "device_id": device_id,
-                    "phone_ip": phone_ip,
+                    "phone_ip": phone_ips[0] if phone_ips else phone_ip,
+                    "phone_ips": phone_ips,
                     "web_client_id": web_client_id,
                     "created_at": time.time(),
                 }
