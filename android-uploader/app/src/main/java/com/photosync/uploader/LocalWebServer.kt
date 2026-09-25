@@ -36,6 +36,8 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     private data class WebClient(val token: String, val ip: String, val connectedAt: Long, @Volatile var lastSeen: Long)
     private val webClients = ConcurrentHashMap<String, WebClient>()
     private val attempts = ConcurrentHashMap<String, MutableList<Long>>()
+    private data class PairRequest(val id: String, val ip: String, val createdAt: Long, @Volatile var state: String = "pending", @Volatile var sessionToken: String? = null)
+    private val pairRequests = ConcurrentHashMap<String, PairRequest>()
     private val lifetime = 30 * 60 * 1000L
     private val root = File(context.filesDir, "photosync_local_server")
     private val uploads = File(root, "uploads")
@@ -54,7 +56,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             serverSocket = s
             pin = generatePin()
             appToken = generateToken()
-            sessions.clear(); webClients.clear(); attempts.clear(); running = true
+            sessions.clear(); webClients.clear(); attempts.clear(); pairRequests.clear(); running = true
             executor?.shutdownNow()
             executor = Executors.newCachedThreadPool()
             val acceptor = Thread({ acceptLoop() }, "PhotoSync-Embedded-Acceptor")
@@ -76,7 +78,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     @Synchronized
     fun stop() {
         running = false
-        sessions.clear(); webClients.clear(); attempts.clear()
+        sessions.clear(); webClients.clear(); attempts.clear(); pairRequests.clear()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         try { acceptThread?.interrupt() } catch (_: Throwable) {}
@@ -85,7 +87,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         executor = null
     }
 
-    fun refreshPin(): String { pin = generatePin(); appToken = generateToken(); sessions.clear(); webClients.clear(); attempts.clear(); return pin }
+    fun refreshPin(): String { pin = generatePin(); appToken = generateToken(); sessions.clear(); webClients.clear(); attempts.clear(); pairRequests.clear(); return pin }
     fun isRunning() = running && serverSocket?.isClosed == false
     fun currentPin() = pin
     fun localAppToken() = appToken
@@ -176,6 +178,10 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                     path == "/" || path == "/dashboard" || path == "/dashboard/" -> html(page())
                     path == "/health" && method == "GET" -> json("{\"ok\":true,\"running\":"+isRunning()+"}")
                     path == "/api/pair" && method == "POST" -> pair(clientIp, query["pin"] ?: "")
+                    path == "/api/pair/status" && method == "GET" -> pairStatus(query["id"])
+                    path == "/api/pair/requests" && method == "GET" && appTrusted -> pairRequestsResponse()
+                    path == "/api/pair/approve" && method == "POST" && appTrusted -> if (approvePairRequest(query["id"] ?: "")) json("{\"ok\":true}") else json("{\"ok\":false}", "404 Not Found")
+                    path == "/api/pair/reject" && method == "POST" && appTrusted -> if (rejectPairRequest(query["id"] ?: "")) json("{\"ok\":true}") else json("{\"ok\":false}", "404 Not Found")
                     path == "/api/session" -> if (authorized) json("{\"authorized\":true,\"expires_in_seconds\":1800}") else json("{\"authorized\":false}", "401 Unauthorized")
                     path == "/api/logout" && method == "POST" -> logout(token)
                     path == "/api/web-clients" && method == "GET" -> webClientsResponse()
@@ -198,6 +204,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
 
     private data class Response(val status: String, val type: String, val body: String = "", val bytes: ByteArray? = null, val file: File? = null, val cookie: String? = null, val extra: String = "")
     private fun json(body: String, status: String = "200 OK") = Response(status, "application/json; charset=utf-8", body)
+    private fun Response.withCookie(cookie: String) = copy(cookie = cookie)
     private fun html(body: String) = Response("200 OK", "text/html; charset=utf-8", body)
 
     private fun write(socket: Socket, response: Response) {
@@ -228,13 +235,56 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         if (list.size >= 5) return json("{\"paired\":false,\"message\":\"Too many attempts; try again later\"}", "429 Too Many Requests")
         if (supplied.length == 6 && supplied == pin) {
             list.clear()
-            val t = generateToken(); sessions[t] = now + lifetime
-            webClients[t] = WebClient(t, ip, now, now)
-            return Response("200 OK", "application/json; charset=utf-8", "{\"paired\":true,\"expires_in_seconds\":1800}", cookie = "photosync_session=$t; Max-Age=1800; Path=/; HttpOnly; SameSite=Lax")
+            pairRequests.values.removeIf { it.ip == ip && now - it.createdAt > 5_000 }
+            val id = generateToken().take(16)
+            pairRequests[id] = PairRequest(id, ip, now)
+            return json(JSONObject().apply {
+                put("paired", false); put("pending", true); put("request_id", id)
+                put("message", "Pairing request sent to phone")
+            }.toString(), "202 Accepted")
         }
         list.add(now)
         return json("{\"paired\":false,\"message\":\"Invalid PIN\"}", "403 Forbidden")
     }
+
+    data class PairRequestInfo(val id: String, val ip: String, val createdAt: Long)
+    fun pendingPairRequests(): List<PairRequestInfo> =
+        pairRequests.values.filter { it.state == "pending" && System.currentTimeMillis() - it.createdAt < 120_000 }
+            .sortedByDescending { it.createdAt }.map { PairRequestInfo(it.id, it.ip, it.createdAt) }
+
+    fun approvePairRequest(id: String): Boolean {
+        val req = pairRequests[id] ?: return false
+        if (req.state != "pending" || System.currentTimeMillis() - req.createdAt > 120_000) return false
+        val now = System.currentTimeMillis(); val t = generateToken()
+        req.sessionToken = t; req.state = "approved"
+        sessions[t] = now + lifetime; webClients[t] = WebClient(t, req.ip, now, now)
+        return true
+    }
+
+    fun rejectPairRequest(id: String): Boolean {
+        val req = pairRequests[id] ?: return false
+        if (req.state != "pending") return false
+        req.state = "rejected"; return true
+    }
+
+    private fun pairRequestsResponse(): Response = json(JSONArray(pendingPairRequests().map {
+        JSONObject().apply { put("id", it.id); put("ip", it.ip); put("created_at", it.createdAt) }
+    }).toString())
+
+    private fun pairStatus(id: String?): Response {
+        val req = if (id.isNullOrBlank()) null else pairRequests[id]
+        if (req == null) return json("{\"paired\":false,\"pending\":false,\"message\":\"Pairing request not found\"}", "404 Not Found")
+        return when (req.state) {
+            "approved" -> {
+                val t = req.sessionToken ?: return json("{\"paired\":false,\"pending\":true}")
+                pairRequests.remove(req.id)
+                json("{\"paired\":true,\"pending\":false,\"expires_in_seconds\":1800}").withCookie("photosync_session=$t; Max-Age=1800; Path=/; HttpOnly; SameSite=Lax")
+            }
+            "rejected" -> { pairRequests.remove(req.id); json("{\"paired\":false,\"pending\":false,\"message\":\"Pairing request rejected\"}", "403 Forbidden") }
+            else -> json("{\"paired\":false,\"pending\":true}")
+        }
+    }
+
 
     private fun logout(token: String?): Response { if (token != null) { sessions.remove(token); webClients.remove(token) }; return Response("200 OK", "application/json; charset=utf-8", "{\"ok\":true}", cookie = "photosync_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax") }
     private fun parseCookie(h: String?): String? = h?.split(';')?.map { it.trim() }?.firstOrNull { it.startsWith("photosync_session=") }?.substringAfter('=')
