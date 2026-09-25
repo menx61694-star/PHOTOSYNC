@@ -85,14 +85,28 @@ def file_info(path,source,device_id,web_client_id=None):
     if web_client_id:info['url']=f'/web-client/file/{safe_device_id(web_client_id)}/{safe_device_id(device_id)}/{source}/{path.name}'
     return info
 class ConnectionManager:
-    def __init__(self):self.connections={};self.connection_ips={}
-    async def connect(self,ws,device_id):await ws.accept();self.connections[ws]=device_id;self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
-    def disconnect(self,ws):self.connections.pop(ws,None);self.connection_ips.pop(ws,None)
+    def __init__(self):
+        self.connections={}
+        self.connection_ips={}
+        self.connection_advertised_ips={}
+    async def connect(self,ws,device_id,advertised_ip=''):
+        await ws.accept()
+        self.connections[ws]=device_id
+        self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
+        self.connection_advertised_ips[ws]=advertised_ip or ''
+    def disconnect(self,ws):
+        self.connections.pop(ws,None)
+        self.connection_ips.pop(ws,None)
+        self.connection_advertised_ips.pop(ws,None)
     def devices(self):return sorted(set(self.connections.values()))
     def ip_for_device(self,device_id):
         for ws,did in list(self.connections.items()):
             if did==device_id:return self.connection_ips.get(ws,'unknown')
         return 'unknown'
+    def advertised_ip_for_device(self,device_id):
+        for ws,did in list(self.connections.items()):
+            if did==device_id:return self.connection_advertised_ips.get(ws,'')
+        return ''
     async def send_to_device(self,device_id,message):
         dead=[]
         for ws,did in list(self.connections.items()):
@@ -308,7 +322,7 @@ async def websocket_endpoint(websocket:WebSocket):
     host=transport_ip
     device_id=supplied or ip_owner_id(host)
     device_dirs(device_id)
-    await manager.connect(websocket,device_id)
+    await manager.connect(websocket,device_id,advertised_ip if advertised_ok else '')
     manager.connection_ips[websocket]=host
     await websocket.send_json({
         'type':'connection_info',
