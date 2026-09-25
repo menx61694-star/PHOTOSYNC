@@ -496,7 +496,7 @@ let pairPoll=null;
 async function pair(passed){
   let p=(passed||el('pin').value).trim();
   if(!/^\d{6}$/.test(p)){el('msg').textContent='Enter a 6-digit PIN';return false}
-  let r=await fetch('/api/pair?pin='+encodeURIComponent(p),{method:'POST',cache:'no-store'});
+  let r=await fetch('/api/pair?pin='+encodeURIComponent(p),{method:'POST',cache:'no-store',credentials:'include'});
   let d=await r.json().catch(()=>({}));
   if(!r.ok && r.status!==202){el('msg').textContent=d.message||'Pairing failed';return false}
   if(d.pending){
@@ -504,7 +504,7 @@ async function pair(passed){
     if(pairPoll)clearInterval(pairPoll);
     pairPoll=setInterval(async()=>{
       try{
-        let sr=await fetch('/api/pair/status?id='+encodeURIComponent(d.request_id),{cache:'no-store'});
+        let sr=await fetch('/api/pair/status?id='+encodeURIComponent(d.request_id),{cache:'no-store',credentials:'include'});
         let sd=await sr.json().catch(()=>({}));
         if(sd.paired){
           clearInterval(pairPoll);pairPoll=null;
@@ -533,9 +533,9 @@ async function jsonResponse(response,name){
 async function load(){
   try{
     let rs=await Promise.all([
-      fetch('/files?source=app&x='+Date.now(),{cache:'no-store',credentials:'same-origin'}),
-      fetch('/files?source=received&x='+Date.now(),{cache:'no-store',credentials:'same-origin'}),
-      fetch('/api/web-clients?x='+Date.now(),{cache:'no-store',credentials:'same-origin'})
+      fetch('/files?source=app&x='+Date.now(),{cache:'no-store',credentials:'include'}),
+      fetch('/files?source=received&x='+Date.now(),{cache:'no-store',credentials:'include'}),
+      fetch('/api/web-clients?x='+Date.now(),{cache:'no-store',credentials:'include'})
     ]);
     if(rs.some(r=>r.status===401)){
       el('app').classList.add('hidden');el('gate').classList.remove('hidden');return
