@@ -31,6 +31,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     @Volatile private var acceptThread: Thread? = null
     private val random = SecureRandom()
     @Volatile private var pin = generatePin()
+    @Volatile private var appToken = generateToken()
     private val sessions = ConcurrentHashMap<String, Long>()
     private data class WebClient(val token: String, val ip: String, val connectedAt: Long, @Volatile var lastSeen: Long)
     private val webClients = ConcurrentHashMap<String, WebClient>()
@@ -52,6 +53,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             s.bind(java.net.InetSocketAddress(port), 50)
             serverSocket = s
             pin = generatePin()
+            appToken = generateToken()
             sessions.clear(); webClients.clear(); attempts.clear(); running = true
             executor?.shutdownNow()
             executor = Executors.newCachedThreadPool()
@@ -83,9 +85,10 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         executor = null
     }
 
-    fun refreshPin(): String { pin = generatePin(); sessions.clear(); webClients.clear(); attempts.clear(); return pin }
+    fun refreshPin(): String { pin = generatePin(); appToken = generateToken(); sessions.clear(); webClients.clear(); attempts.clear(); return pin }
     fun isRunning() = running && serverSocket?.isClosed == false
     fun currentPin() = pin
+    fun localAppToken() = appToken
     fun isAuthorized(token: String?) = token != null && sessions[token]?.let { System.currentTimeMillis() < it } == true
     data class WebClientInfo(val id: String, val ip: String, val connectedAt: Long, val lastSeen: Long)
     fun webClients(): List<WebClientInfo> = webClients.values.sortedByDescending { it.lastSeen }.map { WebClientInfo(it.token.take(8), it.ip, it.connectedAt, it.lastSeen) }
@@ -166,7 +169,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                 val query = parseQuery(raw.substringAfter('?', ""))
                 val clientIp = it.inetAddress?.hostAddress ?: "unknown"
                 val token = parseCookie(headers["cookie"])
-                val appTrusted = clientIp == localIpv4() && !headers["x-photosync-device-id"].isNullOrBlank()
+                val appTrusted = headers["x-photosync-local-token"] == appToken
                 if (token != null && isAuthorized(token)) webClients[token]?.lastSeen = System.currentTimeMillis()
                 val authorized = isAuthorized(token) || appTrusted
                 val response = when {
@@ -253,12 +256,19 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         }
     }
 
-    private fun files(source: String?): Response {
+    private fun fileArray(source: String?): JSONArray {
         val dir = if (source == "app") uploads else downloads
         val a = JSONArray()
-        dir.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() }?.forEach { a.put(fileJson(it, if (dir == uploads) "app" else "received")) }
-        return json(a.toString())
+        dir.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() }?.forEach {
+            a.put(fileJson(it, if (dir == uploads) "app" else "received"))
+        }
+        return a
     }
+
+    private fun files(source: String?): Response = json(fileArray(source).toString())
+
+    /** Direct filesystem listing for the Android app UI; avoids a self-HTTP/auth round trip. */
+    fun listFilesForApp(source: String): JSONArray = fileArray(source)
 
     private fun file(path: String, download: Boolean): Response {
         val bits = path.removePrefix("/files/").split('/', limit = 2)
