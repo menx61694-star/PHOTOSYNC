@@ -53,6 +53,12 @@ class LocalServer(context: Context, port: Int = 18000) {
         ""
     }
 
+    fun localAppToken(): String = try {
+        delegate?.localAppToken() ?: ""
+    } catch (_: Throwable) {
+        ""
+    }
+
     fun isAuthorized(token: String?): Boolean = try {
         delegate?.isAuthorized(token) == true
     } catch (_: Throwable) {
@@ -88,6 +94,12 @@ class LocalServer(context: Context, port: Int = 18000) {
         delegate?.disconnectWebClient(id) == true
     } catch (_: Throwable) {
         false
+    }
+
+    fun listFilesForApp(source: String): org.json.JSONArray = try {
+        delegate?.listFilesForApp(source) ?: org.json.JSONArray()
+    } catch (_: Throwable) {
+        org.json.JSONArray()
     }
 
     fun storeAppFile(
