@@ -387,9 +387,14 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     private fun webClientsResponse(): Response {
         val a = JSONArray()
         webClients().forEach { c ->
-            a.put(JSONObject().apply { put("id", c.id); put("ip", c.ip); put("connected_at", c.connectedAt); put("last_seen", c.lastSeen) })
+            a.put(JSONObject().apply {
+                put("id", c.id)
+                put("ip", c.ip)
+                put("connected_at", c.connectedAt)
+                put("last_seen", c.lastSeen)
+            })
         }
-        return json(a.toString())
+        return json(JSONObject().apply { put("clients", a) }.toString())
     }
 
     private fun disconnectWebClientResponse(id: String?): Response {
@@ -441,7 +446,33 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 async function pair(passed){let p=(passed||el('pin').value).trim();if(!/^\d{6}$/.test(p)){el('msg').textContent='Enter a 6-digit PIN';return false}let r=await fetch('/api/pair?pin='+encodeURIComponent(p),{method:'POST',cache:'no-store'});let d=await r.json().catch(()=>({}));if(!r.ok){el('msg').textContent=d.message||'Pairing failed';return false}el('gate').classList.add('hidden');el('app').classList.remove('hidden');load();return true}
 el('pair').onclick=()=>pair();el('pairTop').onclick=()=>pair(el('pinTop').value);el('pin').onkeydown=e=>{if(e.key==='Enter')pair()};async function copyText(v){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(v)}else{let t=document.createElement('textarea');t.value=v;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();document.execCommand('copy');t.remove()}el('textMsg').textContent='Copied ✓'}catch(e){el('textMsg').textContent='Copy failed'}}
 el('copy').onclick=()=>copyText(location.origin);el('qr').onclick=showQr;
-async function load(){try{let rs=await Promise.all([fetch('/files?source=app&x='+Date.now(),{cache:'no-store',credentials:'same-origin'}),fetch('/files?source=received&x='+Date.now(),{cache:'no-store',credentials:'same-origin'}),fetch('/api/web-clients?x='+Date.now(),{cache:'no-store',credentials:'same-origin'})]);if(rs.some(r=>r.status===401)){el('app').classList.add('hidden');el('gate').classList.remove('hidden');return}if(rs.some(r=>!r.ok)){throw Error('File list request failed ('+rs.map(r=>r.status).join('/')+')')}let a=await rs[0].json(),b=await rs[1].json(),c=await rs[2].json();render('sent',a);render('received',b);el('clientCount').textContent=c.clients.length+' client'+(c.clients.length===1?'':'s');el('clients').innerHTML=c.clients.length?c.clients.map(x=>'<div style="padding:10px;text-align:left;border-bottom:1px solid #263750">💻 <b>'+esc(x.ip)+'</b><br><span class=tag>Connected '+new Date(x.connected_at).toLocaleTimeString()+'</span><button class="btn danger" style="float:right;padding:6px 10px" onclick="disconnectClient(\''+esc(x.id)+'\')">Disconnect</button></div>').join(''):'No web clients connected.'}catch(e){el('clients').textContent='Unable to refresh files: '+(e.message||'unknown error')}}
+async function jsonResponse(response,name){
+  const body=await response.text();
+  try{return JSON.parse(body)}
+  catch(e){throw Error(name+' returned invalid JSON: '+body.slice(0,180))}
+}
+async function load(){
+  try{
+    let rs=await Promise.all([
+      fetch('/files?source=app&x='+Date.now(),{cache:'no-store',credentials:'same-origin'}),
+      fetch('/files?source=received&x='+Date.now(),{cache:'no-store',credentials:'same-origin'}),
+      fetch('/api/web-clients?x='+Date.now(),{cache:'no-store',credentials:'same-origin'})
+    ]);
+    if(rs.some(r=>r.status===401)){
+      el('app').classList.add('hidden');el('gate').classList.remove('hidden');return
+    }
+    if(rs.some(r=>!r.ok)){throw Error('File list request failed ('+rs.map(r=>r.status).join('/')+')')}
+    let a=await jsonResponse(rs[0],'Sent files'),
+        b=await jsonResponse(rs[1],'Received files'),
+        c=await jsonResponse(rs[2],'Web clients');
+    render('sent',a);render('received',b);
+    const clients=Array.isArray(c)?c:(Array.isArray(c.clients)?c.clients:[]);
+    el('clientCount').textContent=clients.length+' client'+(clients.length===1?'':'s');
+    el('clients').innerHTML=clients.length?clients.map(x=>'<div style="padding:10px;text-align:left;border-bottom:1px solid #263750">💻 <b>'+esc(x.ip)+'</b><br><span class=tag>Connected '+new Date(x.connected_at).toLocaleTimeString()+'</span><button class="btn danger" style="float:right;padding:6px 10px" onclick="disconnectClient(\\''+esc(x.id)+'\\')">Disconnect</button></div>').join(''):'No web clients connected.'
+  }catch(e){
+    el('clients').textContent='Unable to refresh files: '+(e.message||'unknown error')
+  }
+}
 async function disconnectClient(id){await fetch('/api/web-clients/disconnect?id='+encodeURIComponent(id),{method:'POST',cache:'no-store'});load()}
 let zoom=1;
 function formatBytes(n){if(!n)return '0 B';let u=['B','KB','MB','GB'];let i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),3);return (n/Math.pow(1024,i)).toFixed(i?1:0)+' '+u[i]}
