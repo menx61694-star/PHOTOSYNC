@@ -190,6 +190,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
         findViewById<Button>(R.id.serverSendFilesButton).setOnClickListener {
+            if (!localServer.isRunning()) {
+                status.text = "Start Embedded Server first"
+                return@setOnClickListener
+            }
             picker.launch("*/*")
         }
         findViewById<Button>(R.id.serverReceiveFilesButton).setOnClickListener {
