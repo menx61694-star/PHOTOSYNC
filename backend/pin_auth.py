@@ -184,7 +184,7 @@ def _set_session_cookie(response, token):
         value=token,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
         secure=False,
         path="/",
     )
@@ -303,14 +303,14 @@ def install(app):
         if status == 403:
             _pending_web_pairs.pop(request_id, None)
             return JSONResponse({"paired": False, "pending": False, "message": payload.get("message", "Pairing rejected")}, status_code=403)
-        if status == 200 and payload.get("paired") and cookie:
+        if status == 200 and payload.get("paired"):
             now = time.time()
             token = secrets.token_urlsafe(32)
             with _lock:
                 _sessions[token] = {
                     "expires": now + SESSION_TTL_SECONDS,
                     "device_id": pending["device_id"],
-                    "phone_cookie": cookie,
+                    "phone_cookie": cookie or "",
                     "phone_ip": pending["phone_ip"],
                 }
                 _attempts.clear()
@@ -321,7 +321,7 @@ def install(app):
                 if old_token:
                     revoke_session(old_token)
                 meta["paired_device_id"] = pending["device_id"]
-                meta["phone_session_cookie"] = cookie
+                meta["phone_session_cookie"] = cookie or ""
                 meta["phone_ip"] = pending["phone_ip"]
                 meta["server_session_token"] = token
                 server_main.write_json(server_main.web_meta_path(web_client_id), meta)
@@ -329,7 +329,14 @@ def install(app):
                 revoke_session(token)
                 raise HTTPException(500, "Could not save web pairing session")
             _pending_web_pairs.pop(request_id, None)
-            response = JSONResponse({"paired": True, "session_token": token, "device_id": pending["device_id"], "expires_in_seconds": SESSION_TTL_SECONDS})
+            response = JSONResponse({
+                "paired": True,
+                "session_token": token,
+                "device_id": pending["device_id"],
+                "expires_in_seconds": SESSION_TTL_SECONDS,
+            })
+            # Explicitly return both mechanisms. The browser client may be
+            # configured to use either cookie or X-PhotoSync-Session.
             _set_session_cookie(response, token)
             _set_session_header(response, token)
             return response
