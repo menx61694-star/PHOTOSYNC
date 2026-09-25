@@ -104,25 +104,31 @@ def _phone_request(phone_ip: str, method: str, path: str):
     if not phone_ip:
         return None, None, None
     url = f"http://{phone_ip}:{_LOCAL_SERVER_PORT}{path}"
-    try:
-        req = UrlRequest(url, method=method, headers={"Cache-Control": "no-store"})
-        with _direct_opener.open(req, timeout=2.5) as response:
-            raw = response.read().decode("utf-8", "replace")
-            raw_cookie = response.headers.get("Set-Cookie", "")
-            cookie = raw_cookie.split(";", 1)[0].strip()
-            return response.status, raw, cookie
-    except HTTPError as exc:
+    last_error = None
+    # Embedded-server startup can race the browser pairing request. Retry once.
+    for attempt in range(2):
         try:
-            raw = exc.read().decode("utf-8", "replace")
-        except Exception:
-            raw = str(exc)
-        raw_cookie = exc.headers.get("Set-Cookie", "") if exc.headers else ""
-        cookie = raw_cookie.split(";", 1)[0].strip()
-        return exc.code, raw, cookie
-    except Exception as exc:
-        return None, str(exc), None
-
-
+            req = UrlRequest(url, method=method, headers={"Cache-Control": "no-store"})
+            with _direct_opener.open(req, timeout=3.0) as response:
+                raw = response.read().decode("utf-8", "replace")
+                raw_cookie = response.headers.get("Set-Cookie", "")
+                cookie = raw_cookie.split(";", 1)[0].strip()
+                return response.status, raw, cookie
+        except HTTPError as exc:
+            try:
+                raw = exc.read().decode("utf-8", "replace")
+            except Exception:
+                raw = str(exc)
+            raw_cookie = exc.headers.get("Set-Cookie", "") if exc.headers else ""
+            cookie = raw_cookie.split(";", 1)[0].strip()
+            return exc.code, raw, cookie
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.25)
+                continue
+            return None, str(last_error), None
+    return None, str(last_error or "phone embedded server unavailable"), None
 def _verify_phone_pin(phone_ip: str, pin: str):
     phone_ip = _safe_phone_ip(phone_ip)
     pin = (pin or "").strip()
