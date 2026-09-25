@@ -3,7 +3,6 @@ import os
 import secrets
 import threading
 import time
-import asyncio
 from collections import defaultdict, deque
 from urllib.parse import urlencode
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
@@ -379,26 +378,11 @@ def install(app):
                 return JSONResponse({"detail": "Method not allowed"}, status_code=405)
             if not pin or not phone_ip or not device_id:
                 return JSONResponse({"detail": "Phone PIN, device IP and device ID are required"}, status_code=400)
-            # The authenticated PC↔phone WebSocket can start the phone's
-            # embedded HTTP server on demand. This removes the old
-            # "server must already be running" dead-end.
-            try:
-                import main as server_main
-                manager = getattr(server_main, "manager", None)
-                if manager and device_id in manager.devices():
-                    await manager.send_to_device(device_id, {"type": "prepare_web_pairing"})
-            except Exception:
-                pass
+            # Embedded Server and PC Server are intentionally separate.
+            # Browser pairing must never start the Embedded Server implicitly.
+            # The user must start it explicitly from the Android Server page.
             state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
-            # Starting the embedded server is asynchronous on Android. Give it
-            # a short readiness window before declaring the phone unreachable.
-            if state == "unreachable":
-                for _ in range(12):
-                    await asyncio.sleep(0.25)
-                    state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
-                    if state != "unreachable":
-                        break
-            if state == "pending" and request_id:
+                        if state == "pending" and request_id:
                 web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
                 if not web_client_id:
                     return JSONResponse({"detail": "Web client ID is required"}, status_code=400)
