@@ -301,12 +301,22 @@ async def websocket_endpoint(websocket:WebSocket):
         advertised_ok=ipaddress.ip_address(advertised_ip).is_private
     except ValueError:
         advertised_ok=False
-    host=advertised_ip if advertised_ok else transport_ip
+    # The TCP peer address is the address the PC can actually use to reach
+    # the phone. Do not replace it with the phone's self-reported interface:
+    # Android can have Wi-Fi, mobile, VPN, or virtual interfaces and the first
+    # local address is not necessarily reachable from this PC.
+    host=transport_ip
     device_id=supplied or ip_owner_id(host)
     device_dirs(device_id)
     await manager.connect(websocket,device_id)
     manager.connection_ips[websocket]=host
-    await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'connections':len(manager.devices())})
+    await websocket.send_json({
+        'type':'connection_info',
+        'device_id':device_id,
+        'ip':host,
+        'advertised_ip':advertised_ip if advertised_ok else '',
+        'connections':len(manager.devices())
+    })
     await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
     try:
         while True:await websocket.receive_text()
