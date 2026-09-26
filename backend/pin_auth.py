@@ -294,6 +294,10 @@ _PUBLIC_EXACT = {
     "/web-client/pair-status",
     "/web-client/disconnect",
     "/connections",
+    "/account/signup",
+    "/account/login",
+    "/account/me",
+    "/account/logout",
 }
 _PUBLIC_PREFIXES = ("/dashboard",)
 _APP_TRUST_HEADER = "X-PhotoSync-Device-ID"
