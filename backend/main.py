@@ -107,6 +107,19 @@ class ConnectionManager:
         for ws,did in list(self.connections.items()):
             if did==device_id:return self.connection_advertised_ips.get(ws,'')
         return ''
+    async def disconnect_all(self, code=1008, reason='Server pairing PIN refreshed'):
+        sockets=list(self.connections.keys())
+        for ws in sockets:
+            try:
+                await ws.close(code=code, reason=reason)
+            except Exception:
+                pass
+            self.disconnect(ws)
+        if sockets:
+            try:
+                await self.broadcast({'type':'connections_changed','count':len(self.devices())})
+            except Exception:
+                pass
     async def send_to_device(self,device_id,message):
         dead=[]
         for ws,did in list(self.connections.items()):
