@@ -729,7 +729,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-            }.start()
+            }
         } catch (t: Throwable) {
             serverStatus.text = "● Server: Connection failed"
             status.text = "Invalid or unavailable server URL"
