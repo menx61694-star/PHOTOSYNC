@@ -65,6 +65,7 @@ class AccountActivity : AppCompatActivity() {
         root.addView(password)
 
         action = primaryButton("Create Account")
+        action.setOnClickListener { submit() }
         root.addView(action)
 
         modeToggle = secondaryButton("Already have an account? Log in")
@@ -109,10 +110,10 @@ class AccountActivity : AppCompatActivity() {
                         .add("username", username.text.toString().trim())
                 }
                 val endpoint = if (signup) "/account/signup" else "/account/login"
-                val response = client.newCall(Request.Builder().url(server + endpoint).post(form.build()).build()).execute()
-                val body = response.body?.string().orEmpty()
-                if (!response.isSuccessful) throw IllegalStateException(JSONObject(body).optString("detail", "Request failed"))
-                val json = JSONObject(body)
+                client.newCall(Request.Builder().url(server + endpoint).post(form.build()).build()).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) throw IllegalStateException(JSONObject(body).optString("detail", "Request failed"))
+                    val json = JSONObject(body)
                 val account = json.optJSONObject("account")
                 prefs.edit()
                     .putString("account_name", account?.optString("name", "") ?: "")
@@ -121,6 +122,7 @@ class AccountActivity : AppCompatActivity() {
                     .putString("account_session_token", json.optString("account_session_token", ""))
                     .putBoolean("account_logged_in", true)
                     .apply()
+                }
 
                 runOnUiThread {
                     Toast.makeText(this, if (signup) "Account created ✓" else "Login successful ✓", Toast.LENGTH_SHORT).show()
