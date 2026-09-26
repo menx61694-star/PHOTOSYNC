@@ -309,9 +309,19 @@ def files(request:Request,source:str|None=None,device_id:str|None=None,all:bool=
     if source=='web':return [file_info(p,'web',owner) for p in downloads.iterdir() if p.is_file() and '__web__' in p.name]
     return list_dir(uploads,'app',owner)+list_dir(downloads,'received',owner)
 @app.get('/files/{device_id}/{source}/{filename}')
-def get_file(device_id:str,source:str,filename:str):
+def get_file(request:Request,device_id:str,source:str,filename:str):
     device_id=safe_device_id(device_id);filename=Path(filename).name
     if source not in {'app','received','web'}:raise HTTPException(404,'Not found')
+    session_token = request.cookies.get('photosync_session') or request.headers.get('X-PhotoSync-Session','') or request.query_params.get('session','')
+    from pin_auth import session_device
+    session_device_id = session_device(session_token)
+    if session_device_id:
+        if session_device_id != device_id:
+            raise HTTPException(403,'Access denied to foreign device files')
+    else:
+        app_device_id = safe_device_id(request.headers.get('X-PhotoSync-Device-ID',''))
+        if app_device_id != device_id:
+            raise HTTPException(403,'Access denied to foreign device files')
     uploads,downloads=device_dirs(device_id);path=(uploads if source=='app' else downloads)/filename
     if not path.is_file():raise HTTPException(404,'Not found')
     return FileResponse(path)
@@ -381,7 +391,8 @@ def _forward_file_to_phone(phone_ip,phone_cookie,filename,file_obj,total_size,co
 async def upload_stream(request:Request, source:str='app', filename:str='file', device_id:str=''):
     source = source if source in {'app','received'} else 'app'
     owner = request_owner_id(request, device_id)
-    folder, _ = device_dirs(owner)
+    uploads, downloads = device_dirs(owner)
+    folder = uploads if source == 'app' else downloads
     original = safe_name(filename)
     transfer_id = uuid4().hex
     total = int(request.headers.get('content-length') or 0)
@@ -396,7 +407,7 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
             async for chunk in request.stream():
                 if not chunk:
                     continue
-                output.write(chunk)
+                await asyncio.to_thread(output.write, chunk)
                 received += len(chunk)
                 if received > total:
                     raise HTTPException(400, 'Request body is larger than declared Content-Length')
@@ -439,8 +450,13 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
 async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form(''),web_client_id:str=Form('')):
     source=source if source in {'web','app','unknown'} else 'unknown'
     if source=='web':
-        cid=safe_device_id(web_client_id);meta=get_web_meta(cid);targets=[safe_device_id(target_device_id)] if target_device_id else ([safe_device_id(meta.get('paired_device_id',''))] if meta.get('paired_device_id') else manager.devices());targets=[d for d in targets if d]
-        if not targets:raise HTTPException(400,'No connected phone')
+        cid=safe_device_id(web_client_id);meta=get_web_meta(cid)
+        paired_device = safe_device_id(meta.get('paired_device_id',''))
+        requested_device = safe_device_id(target_device_id)
+        if requested_device and requested_device != paired_device:
+            raise HTTPException(403,'Web client is not paired with the selected phone')
+        targets=[requested_device or paired_device] if (requested_device or paired_device) else []
+        if not targets:raise HTTPException(400,'Pair a phone before sending files')
         original=safe_name(file.filename);transfer_id=uuid4().hex;total_size=int(file.size or 0);results=[]
         if total_size <= 0:raise HTTPException(400,'Empty file')
         for did in targets:
@@ -458,14 +474,18 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
             await manager.send_to_device(did,{'type':'file_uploaded',**phone_info})
             results.append(phone_info)
         entry=dict(results[0]);entry['targets']=[r['device_id'] for r in results];entry['source']='web';add_web_history(cid,'sent',entry);return entry
-    owner=request_owner_id(request,device_id);folder,_=device_dirs(owner);original=safe_name(file.filename);transfer_id=uuid4().hex;total=int(file.size or 0);received=0;last=-1;destination=folder/f'{transfer_id}__{source}__{owner}__{original}'
+    owner=request_owner_id(request,device_id)
+    uploads, downloads = device_dirs(owner)
+    stored_source = 'app' if source == 'app' else 'received'
+    folder = uploads if stored_source == 'app' else downloads
+    original=safe_name(file.filename);transfer_id=uuid4().hex;total=int(file.size or 0);received=0;last=-1;destination=folder/f'{transfer_id}__{stored_source}__{owner}__{original}'
     with destination.open('wb') as output:
         while chunk:=await file.read(4*1024*1024):
-            output.write(chunk);received+=len(chunk)
+            await asyncio.to_thread(output.write, chunk);received+=len(chunk)
             if total>0:
                 percent=int(received*100/total)
                 if percent!=last:last=percent;await manager.send_to_device(owner,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'received':received,'total':total,'percent':min(100,percent)})
-    info=file_info(destination,'app' if source=='app' else 'received',owner);info['content_type']=file.content_type or 'application/octet-stream';info['transfer_id']=transfer_id;await manager.send_to_device(owner,{'type':'file_uploaded',**info});append_received_to_paired_web_clients(owner,info);return info
+    info=file_info(destination,stored_source,owner);info['content_type']=file.content_type or 'application/octet-stream';info['transfer_id']=transfer_id;await manager.send_to_device(owner,{'type':'file_uploaded',**info});append_received_to_paired_web_clients(owner,info);return info
 @app.post('/account/signup')
 def account_signup(name:str=Form(...),mobile:str=Form(...),username:str=Form(...),email:str=Form(...),password:str=Form(...)):
     name=_clean_text(name,80);mobile=re.sub(r'[^0-9+ -]','',mobile or '').strip()[:20];username=re.sub(r'[^A-Za-z0-9_.-]','',username or '').lower()[:32];email=_clean_text(email,160).lower()
@@ -496,7 +516,7 @@ def discovery_loop():
         while True:
             data,addr=sock.recvfrom(1024)
             if data.decode('utf-8',errors='ignore').strip()!=DISCOVERY_TOKEN:continue
-            sock.sendto(json.dumps({'service':'PHOTOSYNC','version':1,'port':APP_PORT,'pairing_pin':server_pairing_pin()}).encode(),addr)
+            sock.sendto(json.dumps({'service':'PHOTOSYNC','version':1,'port':APP_PORT}).encode(),addr)
     except OSError:pass
     finally:sock.close()
 threading.Thread(target=discovery_loop,name='photosync-discovery',daemon=True).start()
