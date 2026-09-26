@@ -672,7 +672,7 @@ class PeerActivity : AppCompatActivity() {
                                 status.text = "Receiving $name • $percent%"
                             }
                         }
-                        output.flush()
+                        out.flush()
                     }
 
                     if (destination != null) {
