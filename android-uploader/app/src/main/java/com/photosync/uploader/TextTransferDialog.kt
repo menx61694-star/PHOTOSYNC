@@ -1,6 +1,7 @@
 package com.photosync.uploader
 
 import android.app.AlertDialog
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.webkit.MimeTypeMap
@@ -126,7 +127,7 @@ object TextTransferDialog {
                 if (!temp!!.isFile || temp!!.length() <= 0L) error("Clipboard image is empty")
                 sendImage(context, temp!!, mime, dialog)
             } catch (e: Exception) {
-                (context as? android.app.Activity)?.runOnUiThread {
+                postIfActivityAlive(context) {
                     ToastCompat.show(context, "Image paste failed: " + (e.message ?: "unknown error"))
                 }
                 temp?.delete()
@@ -136,13 +137,14 @@ object TextTransferDialog {
 
     private fun sendImage(context: Context, file: File, mime: String, dialog: AlertDialog?) {
         val prefs = context.getSharedPreferences("photosync", Context.MODE_PRIVATE)
+        val app = context.applicationContext as? PhotoSyncApplication
+        val local = app?.localServer?.isRunning() == true
         val saved = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
         val backend = prefs.getString("backend_server_url", "")?.trim()?.removeSuffix("/") ?: ""
-        val local = saved.contains(":18000")
-        val target = if (local || backend.isBlank()) saved else backend
+        val target = if (local) app?.localServer?.url()?.trim()?.removeSuffix("/") ?: "" else backend.ifBlank { saved }
         if (target.isBlank()) {
             file.delete()
-            (context as? android.app.Activity)?.runOnUiThread {
+            postIfActivityAlive(context) {
                 ToastCompat.show(context, "Connect to a PhotoSync server first")
             }
             return
@@ -154,11 +156,10 @@ object TextTransferDialog {
                 val body = file.asRequestBody(mime.toMediaType())
                 val response = if (local) {
                     client.newCall(
-                        Request.Builder()
-                            .url("$target/upload?source=app&filename=" + Uri.encode(name))
-                            .header("Content-Type", mime)
-                            .post(body)
-                            .build()
+                        buildAuthenticatedRequest(context, "$target/upload?source=app&filename=" + Uri.encode(name), local, prefs)
+                        .header("Content-Type", mime)
+                        .post(body)
+                        .build()
                     ).execute()
                 } else {
                     val form = MultipartBody.Builder().setType(MultipartBody.FORM)
@@ -167,10 +168,7 @@ object TextTransferDialog {
                         .addFormDataPart("file", name, body)
                         .build()
                     client.newCall(
-                        Request.Builder()
-                            .url("$target/upload")
-                            .header("X-PhotoSync-Device-ID", DeviceIdentity(context).id)
-                            .header("X-PhotoSync-Server-PIN", prefs.getString("server_pin", "").orEmpty())
+                        buildAuthenticatedRequest(context, "$target/upload", local, prefs)
                             .post(form)
                             .build()
                     ).execute()
@@ -178,12 +176,12 @@ object TextTransferDialog {
                 response.use {
                     if (!it.isSuccessful) error("HTTP " + it.code)
                 }
-                (context as? android.app.Activity)?.runOnUiThread {
+                postIfActivityAlive(context) {
                     ToastCompat.show(context, "Image pasted and sent ✓")
-                    dialog?.dismiss()
+                    if (dialog?.isShowing == true) dialog.dismiss()
                 }
             } catch (e: Exception) {
-                (context as? android.app.Activity)?.runOnUiThread {
+                postIfActivityAlive(context) {
                     ToastCompat.show(context, "Image send failed: " + (e.message ?: "unknown error"))
                 }
             } finally {
@@ -205,7 +203,7 @@ object TextTransferDialog {
                 val name = "text_" + System.currentTimeMillis() + ".txt"
                 val response = if (local) {
                     val body = text.toRequestBody("text/plain; charset=utf-8".toMediaType())
-                    client.newCall(Request.Builder().url("$target/text").post(body).build()).execute()
+                    client.newCall(buildAuthenticatedRequest(context, "$target/text", local, prefs).post(body).build()).execute()
                 } else {
                     val fileBody = text.toRequestBody("text/plain; charset=utf-8".toMediaType())
                     val form = MultipartBody.Builder().setType(MultipartBody.FORM)
@@ -214,21 +212,19 @@ object TextTransferDialog {
                         .addFormDataPart("file", name, fileBody)
                         .build()
                     client.newCall(
-                        Request.Builder().url("$target/upload")
-                            .header("X-PhotoSync-Device-ID", DeviceIdentity(context).id)
-                            .header("X-PhotoSync-Server-PIN", prefs.getString("server_pin", "").orEmpty())
+                        buildAuthenticatedRequest(context, "$target/upload", local, prefs)
                             .post(form).build()
                     ).execute()
                 }
                 response.use {
                     if (!it.isSuccessful) error("HTTP " + it.code)
                 }
-                (context as? android.app.Activity)?.runOnUiThread {
+                postIfActivityAlive(context) {
                     ToastCompat.show(context, "Text sent ✓")
-                    dialog.dismiss()
+                    if (dialog.isShowing) dialog.dismiss()
                 }
             } catch (e: Exception) {
-                (context as? android.app.Activity)?.runOnUiThread {
+                postIfActivityAlive(context) {
                     ToastCompat.show(context, "Text send failed: " + e.message)
                 }
             }
@@ -237,11 +233,15 @@ object TextTransferDialog {
 
     private fun showReceived(context: Context) {
         val prefs = context.getSharedPreferences("photosync", Context.MODE_PRIVATE)
-        val target = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        val app = context.applicationContext as? PhotoSyncApplication
+        val local = app?.localServer?.isRunning() == true
+        val saved = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        val backend = prefs.getString("backend_server_url", "")?.trim()?.removeSuffix("/") ?: ""
+        val target = if (local) app?.localServer?.url()?.trim()?.removeSuffix("/") ?: "" else backend.ifBlank { saved }
         if (target.isBlank()) { ToastCompat.show(context, "Connect to a server first"); return }
         Thread {
             try {
-                val req = Request.Builder().url("$target/files?source=received").build()
+                val req = buildAuthenticatedRequest(context, "$target/files?source=received", local, prefs).build()
                 client.newCall(req).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP " + response.code)
                     val array = JSONArray(response.body?.string() ?: "[]")
@@ -252,10 +252,10 @@ object TextTransferDialog {
                         val url = item.optString("url", "")
                         if (name.lowercase().endsWith(".txt") && url.isNotBlank()) texts.add(name to url)
                     }
-                    (context as? android.app.Activity)?.runOnUiThread { renderReceived(context, texts, target) }
+                    postIfActivityAlive(context) { renderReceived(context, texts, target) }
                 }
             } catch (e: Exception) {
-                (context as? android.app.Activity)?.runOnUiThread { ToastCompat.show(context, "Unable to load received text: " + e.message) }
+                postIfActivityAlive(context) { ToastCompat.show(context, "Unable to load received text: " + e.message) }
             }
         }.start()
     }
@@ -280,17 +280,44 @@ object TextTransferDialog {
     private fun readText(context: Context, url: String, name: String) {
         Thread {
             try {
-                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                val prefs = context.getSharedPreferences("photosync", Context.MODE_PRIVATE)
+                val app = context.applicationContext as? PhotoSyncApplication
+                val local = app?.localServer?.isRunning() == true
+                client.newCall(buildAuthenticatedRequest(context, url, local, prefs).build()).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP " + response.code)
                     val text = response.body?.string().orEmpty()
-                    (context as? android.app.Activity)?.runOnUiThread {
+                    postIfActivityAlive(context) {
                         AlertDialog.Builder(context).setTitle(name).setMessage(text).setPositiveButton("Close", null).show()
                     }
                 }
             } catch (e: Exception) {
-                (context as? android.app.Activity)?.runOnUiThread { ToastCompat.show(context, "Unable to open text: " + e.message) }
+                postIfActivityAlive(context) { ToastCompat.show(context, "Unable to open text: " + e.message) }
             }
         }.start()
+    }
+}
+
+private fun buildAuthenticatedRequest(
+    context: Context,
+    url: String,
+    local: Boolean,
+    prefs: android.content.SharedPreferences
+): Request.Builder {
+    val builder = Request.Builder().url(url)
+    if (local) {
+        val token = (context.applicationContext as? PhotoSyncApplication)?.localServer?.localAppToken().orEmpty()
+        if (token.isNotBlank()) builder.header("X-PhotoSync-Local-Token", token)
+    } else {
+        builder.header("X-PhotoSync-Device-ID", DeviceIdentity(context).id)
+            .header("X-PhotoSync-Server-PIN", prefs.getString("server_pin", "").orEmpty())
+    }
+    return builder
+}
+
+private fun postIfActivityAlive(context: Context, action: () -> Unit) {
+    val activity = context as? Activity ?: return
+    activity.runOnUiThread {
+        if (!activity.isFinishing && !activity.isDestroyed) action()
     }
 }
 
