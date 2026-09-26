@@ -118,6 +118,7 @@ class AccountActivity : AppCompatActivity() {
                     .putString("account_name", account?.optString("name", "") ?: "")
                     .putString("account_username", account?.optString("username", "") ?: "")
                     .putString("account_email", account?.optString("email", emailText) ?: emailText)
+                    .putString("account_session_token", json.optString("account_session_token", ""))
                     .putBoolean("account_logged_in", true)
                     .apply()
 
