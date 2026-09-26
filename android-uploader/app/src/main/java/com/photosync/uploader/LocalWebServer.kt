@@ -8,6 +8,7 @@ import android.util.Base64
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import java.io.ByteArrayOutputStream
+import java.io.FileOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -372,17 +373,20 @@ class LocalWebServer(private val context: Context, private val port: Int) {
     }
 
     private fun upload(input: InputStream, headers: Map<String, String>, query: Map<String, String>): Response {
+        val contentType = headers["content-type"].orEmpty()
+        if (contentType.lowercase().startsWith("multipart/form-data")) {
+            return uploadMultipart(input, headers["content-length"]?.toLongOrNull(), contentType)
+        }
+
         val source = if (query["source"] == "app") "app" else "received"
         val name = safeName(query["filename"])
-        val length = headers["content-length"]?.toLongOrNull() ?: return json("{\"detail\":\"Content-Length required\"}", "411 Length Required")
+        val length = headers["content-length"]?.toLongOrNull()
+            ?: return json("{\"detail\":\"Content-Length required\"}", "411 Length Required")
         if (length <= 0L) return json("{\"detail\":\"Empty file\"}", "400 Bad Request")
         val dir = if (source == "app") uploads else downloads
         var target = File(dir, "${System.currentTimeMillis()}__$name"); var n = 1
         while (target.exists()) target = File(dir, "${System.currentTimeMillis()}__${n++}__$name")
         var total = 0L
-        // Do not close the request input here. Closing Socket.getInputStream()
-        // also closes the socket, which would prevent the HTTP response from
-        // reaching the uploader after a successful upload.
         target.outputStream().use { out ->
             val buffer = ByteArray(256 * 1024)
             while (total < length) {
@@ -397,6 +401,111 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             return json("{\"detail\":\"Incomplete upload\"}", "400 Bad Request")
         }
         return json(fileJson(target, source).toString())
+    }
+
+    private fun uploadMultipart(input: InputStream, contentLength: Long?, contentType: String): Response {
+        if (contentLength == null) return json("{\"detail\":\"Content-Length required\"}", "411 Length Required")
+        if (contentLength <= 0L) return json("{\"detail\":\"Empty upload\"}", "400 Bad Request")
+
+        val boundaryMatch = Regex("""boundary=(?:"([^"]+)"|([^;]+))""", RegexOption.IGNORE_CASE).find(contentType)
+            ?: return json("{\"detail\":\"Multipart boundary missing\"}", "400 Bad Request")
+        val boundary = (boundaryMatch.groupValues[1].ifBlank { boundaryMatch.groupValues[2] }).trim()
+        if (boundary.isBlank() || boundary.length > 200) {
+            return json("{\"detail\":\"Invalid multipart boundary\"}", "400 Bad Request")
+        }
+
+        val firstLine = readLine(input) ?: return json("{\"detail\":\"Invalid multipart body\"}", "400 Bad Request")
+        if (firstLine != "--$boundary") {
+            return json("{\"detail\":\"Invalid multipart boundary\"}", "400 Bad Request")
+        }
+
+        while (true) {
+            val partHeaders = mutableMapOf<String, String>()
+            while (true) {
+                val line = readLine(input) ?: return json("{\"detail\":\"Incomplete multipart headers\"}", "400 Bad Request")
+                if (line.isEmpty()) break
+                val c = line.indexOf(':')
+                if (c <= 0) return json("{\"detail\":\"Invalid multipart header\"}", "400 Bad Request")
+                partHeaders[line.substring(0, c).trim().lowercase()] = line.substring(c + 1).trim()
+            }
+
+            val disposition = partHeaders["content-disposition"].orEmpty()
+            val fileMatch = Regex("""filename="([^"]*)"""", RegexOption.IGNORE_CASE).find(disposition)
+            val filename = fileMatch?.groupValues?.getOrNull(1)?.let(::safeName)
+
+            if (!filename.isNullOrBlank()) {
+                val dir = downloads
+                var target = File(dir, "${System.currentTimeMillis()}__$filename")
+                var n = 1
+                while (target.exists()) target = File(dir, "${System.currentTimeMillis()}__${n++}__$filename")
+                try {
+                    FileOutputStream(target).use { out ->
+                        val ended = copyMultipartPart(input, out, boundary.toByteArray(Charsets.ISO_8859_1))
+                        if (!ended) error("Incomplete multipart file")
+                    }
+                    return json(fileJson(target, "received").toString())
+                } catch (e: Exception) {
+                    try { target.delete() } catch (_: Exception) {}
+                    return json("{\"detail\":\"${JSONObject.quote(e.message ?: "Multipart upload failed").trim('"')}\"}", "400 Bad Request")
+                }
+            } else {
+                val ended = copyMultipartPart(input, NullOutputStream(), boundary.toByteArray(Charsets.ISO_8859_1))
+                if (!ended) return json("{\"detail\":\"Incomplete multipart field\"}", "400 Bad Request")
+            }
+        }
+    }
+
+    private fun copyMultipartPart(input: InputStream, output: java.io.OutputStream, boundary: ByteArray): Boolean {
+        val marker = ByteArray(boundary.size + 4)
+        marker[0] = '\r'.code.toByte()
+        marker[1] = '\n'.code.toByte()
+        marker[2] = '-'.code.toByte()
+        marker[3] = '-'.code.toByte()
+        System.arraycopy(boundary, 0, marker, 4, boundary.size)
+
+        var tail = ByteArray(0)
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) return false
+            if (read == 0) continue
+            val combined = ByteArray(tail.size + read)
+            System.arraycopy(tail, 0, combined, 0, tail.size)
+            System.arraycopy(buffer, 0, combined, tail.size, read)
+
+            val index = indexOf(combined, marker)
+            if (index >= 0) {
+                output.write(combined, 0, index)
+                val suffix = ByteArray(2)
+                var got = 0
+                while (got < 2) {
+                    val n = input.read(suffix, got, 2 - got)
+                    if (n <= 0) return false
+                    got += n
+                }
+                output.flush()
+                return suffix[0].toInt() == '-'.code && suffix[1].toInt() == '-'.code
+            }
+
+            val keep = minOf(marker.size - 1, combined.size)
+            val writeCount = combined.size - keep
+            if (writeCount > 0) output.write(combined, 0, writeCount)
+            tail = combined.copyOfRange(writeCount, combined.size)
+        }
+    }
+
+    private fun indexOf(data: ByteArray, needle: ByteArray): Int {
+        if (needle.isEmpty() || data.size < needle.size) return -1
+        outer@ for (i in 0..data.size - needle.size) {
+            for (j in needle.indices) if (data[i + j] != needle[j]) continue@outer
+            return i
+        }
+        return -1
+    }
+
+    private class NullOutputStream : java.io.OutputStream() {
+        override fun write(b: Int) {}
+        override fun write(b: ByteArray, off: Int, len: Int) {}
     }
 
     fun storeAppFile(
