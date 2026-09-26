@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import asyncio
 import secrets
 import threading
 import time
@@ -28,6 +29,40 @@ def _cleanup(now=None):
     expired = [token for token, data in _sessions.items() if data.get("expires", 0) <= now]
     for token in expired:
         _sessions.pop(token, None)
+
+    expired_pairs = [
+        request_id
+        for request_id, data in _pending_web_pairs.items()
+        if now - data.get("created_at", 0) > 300
+    ]
+    for request_id in expired_pairs:
+        _pending_web_pairs.pop(request_id, None)
+
+    for key, attempts in list(_attempts.items()):
+        while attempts and now - attempts[0] >= 60:
+            attempts.popleft()
+        if not attempts:
+            _attempts.pop(key, None)
+
+
+def _attempt_key(request: Request, device_id: str):
+    return f"{_client_ip(request)}|{device_id}"
+
+
+def _record_attempt(key: str, now=None):
+    now = now or time.time()
+    with _lock:
+        _cleanup(now)
+        attempts = _attempts[key]
+        if len(attempts) >= MAX_ATTEMPTS_PER_MINUTE:
+            return False
+        attempts.append(now)
+        return True
+
+
+def _clear_attempts(key: str):
+    with _lock:
+        _attempts.pop(key, None)
 
 
 def valid_session(token, device_id=None):
@@ -163,27 +198,20 @@ def _verify_phone_pin(phone_ips, pin: str):
 
 def _create_session(pin: str, phone_ip: str, device_id: str, request: Request):
     now = time.time()
-    ip = _client_ip(request)
-    key = f"{ip}|{device_id}"
-    with _lock:
-        attempts = _attempts[key]
-        while attempts and now - attempts[0] >= 60:
-            attempts.popleft()
-        if len(attempts) >= MAX_ATTEMPTS_PER_MINUTE:
-            raise HTTPException(429, "Too many PIN attempts; try again later")
+    key = _attempt_key(request, device_id)
+    if not _record_attempt(key, now):
+        raise HTTPException(429, "Too many PIN attempts; try again later")
 
     state, phone_cookie, request_id = _verify_phone_pin(phone_ip, pin)
     if state != "approved":
-        with _lock:
-            _attempts[key].append(now)
         if state == "invalid":
             raise HTTPException(403, "Invalid phone PIN")
         if state == "pending":
             raise HTTPException(202, request_id or "Pairing request pending")
         raise HTTPException(503, "Phone embedded server could not be reached")
 
+    _clear_attempts(key)
     with _lock:
-        _attempts[key].clear()
         token = secrets.token_urlsafe(32)
         _sessions[token] = {
             "expires": now + SESSION_TTL_SECONDS,
@@ -299,13 +327,24 @@ def install(app):
         return {"pin_required": True, "pairing_pin": SERVER_PAIRING_PIN, "message": "Enter this PIN in the PhotoSync Android app when connecting to this PC server"}
 
     @app.post("/api/server-pin/refresh")
-    def refresh_server_pin_info():
+    async def refresh_server_pin_info():
         pin = refresh_server_pairing_pin()
-        return {"ok": True, "pairing_pin": pin, "message": "PC server pairing PIN refreshed; existing pairings were cleared"}
+        try:
+            import main as server_main
+            manager = getattr(server_main, "manager", None)
+            if manager is not None:
+                await manager.disconnect_all()
+        except Exception:
+            # PIN rotation remains successful even if there are no live sockets
+            # or the optional connection manager is unavailable.
+            pass
+        return {"ok": True, "pairing_pin": pin, "message": "PC server pairing PIN refreshed; existing pairings and live connections were cleared"}
 
     @app.get("/web-client/pair-status")
     def web_client_pair_status(request: Request, request_id: str, web_client_id: str, device_id: str):
-        pending = _pending_web_pairs.get(request_id)
+        with _lock:
+            _cleanup()
+            pending = _pending_web_pairs.get(request_id)
         if not pending or pending.get("device_id") != device_id or pending.get("web_client_id") != web_client_id:
             raise HTTPException(404, "Pairing request not found")
         status, raw, cookie = _phone_request(pending.get("phone_ips", [pending["phone_ip"]]), "GET", f"/api/pair/status?id={request_id}")
@@ -321,6 +360,7 @@ def install(app):
             return JSONResponse({"paired": False, "pending": False, "message": payload.get("message", "Pairing rejected")}, status_code=403)
         if status == 200 and payload.get("paired"):
             now = time.time()
+            _clear_attempts(pending.get("attempt_key", ""))
             token = secrets.token_urlsafe(32)
             with _lock:
                 _sessions[token] = {
@@ -404,10 +444,13 @@ def install(app):
                 return JSONResponse({"detail": "Method not allowed"}, status_code=405)
             if not pin or not phone_ip or not device_id:
                 return JSONResponse({"detail": "Phone PIN, device IP and device ID are required"}, status_code=400)
+            attempt_key = _attempt_key(request, device_id)
+            if not _record_attempt(attempt_key):
+                return JSONResponse({"detail": "Too many PIN attempts; try again later"}, status_code=429)
             # Embedded Server and PC Server are intentionally separate.
             # Browser pairing must never start the Embedded Server implicitly.
             # The user must start it explicitly from the Android Server page.
-            state, phone_cookie, request_id = _verify_phone_pin(phone_ips, pin)
+            state, phone_cookie, request_id = await asyncio.to_thread(_verify_phone_pin, phone_ips, pin)
             if state == "pending" and request_id:
                 web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
                 if not web_client_id:
@@ -417,15 +460,21 @@ def install(app):
                     "phone_ip": phone_ips[0] if phone_ips else phone_ip,
                     "phone_ips": phone_ips,
                     "web_client_id": web_client_id,
+                    "attempt_key": attempt_key,
+                    "attempt_key": _attempt_key(request, device_id),
                     "created_at": time.time(),
                 }
                 return JSONResponse({"paired": False, "pending": True, "request_id": request_id, "message": "Approve the pairing request on the phone"}, status_code=202)
             if state == "invalid":
+                _clear_attempts(attempt_key)
                 return JSONResponse({"detail": "Invalid phone PIN", "code": "PHONE_PIN_INVALID", "hint": "This field requires the selected phone's Embedded Server PIN, not the PC Server PIN."}, status_code=403)
             if state == "unreachable":
+                _clear_attempts(attempt_key)
                 return JSONResponse({"detail": "Phone embedded server could not be reached"}, status_code=503)
             if state != "approved":
+                _clear_attempts(attempt_key)
                 return JSONResponse({"detail": "Phone pairing failed"}, status_code=502)
+            _clear_attempts(attempt_key)
             now = time.time()
             token = secrets.token_urlsafe(32)
             with _lock:
@@ -445,7 +494,7 @@ def install(app):
                 revoke_session(token)
             return response
 
-        if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
+        if path in _PUBLIC_EXACT or any(path == prefix or path.startswith(prefix + "/") for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
 
         if request.headers.get(_APP_TRUST_HEADER) and _live_app_request(request):
