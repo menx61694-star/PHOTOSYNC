@@ -293,15 +293,11 @@ def web_client_pair(request:Request,web_client_id:str=Form(...),device_id:str=Fo
     cid=safe_device_id(web_client_id);did=safe_device_id(device_id)
     if not cid or not did:raise HTTPException(400,'web_client_id and device_id required')
     if did not in manager.devices():raise HTTPException(409,'Selected phone is not connected')
-    phone_cookie=getattr(request.state,'photosync_phone_cookie','') or ''
-    if not phone_cookie:raise HTTPException(502,'Phone pairing succeeded but its session cookie was not returned')
-    meta=get_web_meta(cid)
-    old_token=meta.get('server_session_token','')
-    if old_token: revoke_session(old_token)
-    meta['paired_device_id']=did
-    meta['phone_session_cookie']=phone_cookie
-    meta['phone_ip']=manager.ip_for_device(did)
-    meta['server_session_token']=getattr(request.state,'photosync_session_token','')
+    token=getattr(request.state,'photosync_session_token','') or ''
+    if not token: raise HTTPException(401,'Web pairing session was not created')
+    meta=get_web_meta(cid);old_token=meta.get('server_session_token','')
+    if old_token and old_token!=token: revoke_session(old_token)
+    meta['paired_device_id']=did;meta.pop('phone_session_cookie',None);meta.pop('phone_ip',None);meta['server_session_token']=token
     write_json(web_meta_path(cid),meta)
     return {'ok':True,'web_client_id':cid,'paired_device_id':did}
 @app.post('/web-client/unpair')
@@ -365,63 +361,33 @@ def get_file(request:Request,device_id:str,source:str,filename:str):
 async def websocket_endpoint(websocket:WebSocket):
     supplied_pin=(websocket.query_params.get('pairing_pin','') or websocket.headers.get('X-PhotoSync-Server-PIN','')).strip()
     if not valid_server_pairing_pin(supplied_pin):
-        await websocket.close(code=1008, reason='PC server pairing PIN required')
-        return
+        await websocket.close(code=1008, reason='PC server pairing PIN required');return
     supplied=safe_device_id(websocket.query_params.get('device_id','') or websocket.headers.get('X-PhotoSync-Device-ID',''))
     transport_ip=websocket.client.host if websocket.client else 'unknown'
     advertised_ip=(websocket.query_params.get('device_ip','') or '').strip()
-    try:
-        advertised_ok=ipaddress.ip_address(advertised_ip).is_private
-    except ValueError:
-        advertised_ok=False
-    # The TCP peer address is the address the PC can actually use to reach
-    # the phone. Do not replace it with the phone's self-reported interface:
-    # Android can have Wi-Fi, mobile, VPN, or virtual interfaces and the first
-    # local address is not necessarily reachable from this PC.
-    host=transport_ip
-    device_id=supplied or ip_owner_id(host)
-    device_dirs(device_id)
+    try: advertised_ok=ipaddress.ip_address(advertised_ip).is_private
+    except ValueError: advertised_ok=False
+    host=transport_ip;device_id=supplied or ip_owner_id(host);device_dirs(device_id)
     await manager.connect(websocket,device_id,advertised_ip if advertised_ok else '')
     manager.connection_ips[websocket]=host
-    await websocket.send_json({
-        'type':'connection_info',
-        'device_id':device_id,
-        'ip':host,
-        'advertised_ip':advertised_ip if advertised_ok else '',
-        'connections':len(manager.devices())
-    })
+    await websocket.send_json({'type':'connection_info','device_id':device_id,'ip':host,'advertised_ip':advertised_ip if advertised_ok else '','connections':len(manager.devices())})
     await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
     try:
-        while True:await websocket.receive_text()
+        while True: await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket);await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
 
-def _forward_file_to_phone(phone_ip,phone_cookie,filename,file_obj,total_size,content_type):
-    if not phone_ip or not phone_cookie:raise RuntimeError('Phone is not paired for file transfer')
-    if total_size <= 0:raise RuntimeError('Empty file')
-    path=f'/upload?source=web&filename={quote(filename,safe="")}'
-    conn=http.client.HTTPConnection(phone_ip,18000,timeout=max(15,min(300,15+total_size//(1024*1024))))
-    try:
-        conn.putrequest('POST',path)
-        conn.putheader('Cookie',phone_cookie)
-        conn.putheader('Content-Type',content_type or 'application/octet-stream')
-        conn.putheader('Content-Length',str(total_size))
-        conn.putheader('Cache-Control','no-store')
-        conn.endheaders()
-        file_obj.seek(0)
-        remaining=total_size
-        while remaining:
-            chunk=file_obj.read(min(4*1024*1024,remaining))
-            if not chunk:raise RuntimeError('Unexpected end of uploaded file')
-            conn.send(chunk)
-            remaining-=len(chunk)
-        response=conn.getresponse()
-        body=response.read()
-        if not 200 <= response.status < 300:raise RuntimeError(f'Phone HTTP {response.status}')
-        try:return json.loads(body.decode('utf-8'))
-        except Exception:raise RuntimeError('Phone returned invalid upload response')
-    finally:
-        conn.close()
+async def _relay_file_to_device(device_id,file_obj,filename,total_size,content_type,transfer_id):
+    if total_size<=0: raise RuntimeError('Empty file')
+    await manager.send_to_device(device_id,{'type':'web_file_prepare','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
+    await file_obj.seek(0);sent=0
+    while sent<total_size:
+        chunk=file_obj.read(min(256*1024,total_size-sent))
+        if not chunk: raise RuntimeError('Unexpected end of uploaded file')
+        sent+=len(chunk)
+        data=__import__('base64').b64encode(chunk).decode('ascii')
+        await manager.send_to_device(device_id,{'type':'web_file_chunk','transfer_id':transfer_id,'data':data,'received':sent,'total':total_size,'percent':min(100,int(sent*100/total_size))})
+    await manager.send_to_device(device_id,{'type':'web_file_complete','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
 
 @app.post('/upload-stream')
 async def upload_stream(request:Request, source:str='app', filename:str='file', device_id:str=''):
@@ -490,31 +456,21 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
 async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form(''),web_client_id:str=Form('')):
     source=source if source in {'web','app','unknown'} else 'unknown'
     if source=='web':
-        cid=safe_device_id(web_client_id);meta=get_web_meta(cid)
-        paired_device = safe_device_id(meta.get('paired_device_id',''))
-        requested_device = safe_device_id(target_device_id)
-        if requested_device and requested_device != paired_device:
-            raise HTTPException(403,'Web client is not paired with the selected phone')
-        targets=[requested_device or paired_device] if (requested_device or paired_device) else []
-        if not targets:raise HTTPException(400,'Pair a phone before sending files')
-        original=safe_name(file.filename);transfer_id=uuid4().hex;total_size=int(file.size or 0);results=[]
-        if total_size <= 0:raise HTTPException(400,'Empty file')
-        for did in targets:
-            if did not in manager.devices():raise HTTPException(409,f'Phone {did} is not connected')
-            phone_ip=manager.ip_for_device(did)
-            cookie=meta.get('phone_session_cookie','') if did==safe_device_id(meta.get('paired_device_id','')) else ''
-            if not cookie:raise HTTPException(403,'Phone must be paired again before sending files')
+        cid=safe_device_id(web_client_id);meta=get_web_meta(cid);paired_device=safe_device_id(meta.get('paired_device_id',''));requested_device=safe_device_id(target_device_id)
+        if requested_device and requested_device!=paired_device: raise HTTPException(403,'Web client is not paired with the selected phone')
+        did=requested_device or paired_device
+        if not did: raise HTTPException(400,'Pair a phone before sending files')
+        if did not in manager.devices(): raise HTTPException(409,f'Phone {did} is not connected')
+        original=safe_name(file.filename);transfer_id=uuid4().hex;total_size=int(file.size or 0)
+        if total_size<=0: raise HTTPException(400,'Empty file')
+        try:
             await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':0,'total':total_size,'percent':0})
-            try:
-                await file.seek(0)
-                phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,file.file,total_size,file.content_type or 'application/octet-stream')
-            except Exception as exc:
-                raise HTTPException(502,f'Phone transfer failed: {exc}')
-            phone_info['device_id']=did;phone_info['source']='received';phone_info['transfer_id']=transfer_id;phone_info['content_type']=file.content_type or 'application/octet-stream';phone_info['url']=f'http://{phone_ip}:18000{phone_info.get("url","")}'
-            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':total_size,'total':total_size,'percent':100})
-            await manager.send_to_device(did,{'type':'file_uploaded',**phone_info})
-            results.append(phone_info)
-        entry=dict(results[0]);entry['targets']=[r['device_id'] for r in results];entry['source']='web';add_web_history(cid,'sent',entry);return entry
+            await _relay_file_to_device(did,file.file,original,total_size,file.content_type or 'application/octet-stream',transfer_id)
+        except Exception as exc:
+            await manager.send_to_device(did,{'type':'upload_failed','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'error':str(exc)})
+            raise HTTPException(502,f'Phone relay transfer failed: {exc}')
+        entry={'filename':original,'stored_filename':original,'size':total_size,'type':'file','source':'web','device_id':did,'transfer_id':transfer_id,'content_type':file.content_type or 'application/octet-stream','url':f'/web-client/file/{cid}/{did}/received/{original}','targets':[did]}
+        add_web_history(cid,'sent',entry);return entry
     owner=request_owner_id(request,device_id)
     uploads, downloads = device_dirs(owner)
     stored_source = 'app' if source == 'app' else 'received'
