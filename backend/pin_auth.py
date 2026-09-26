@@ -444,6 +444,9 @@ def install(app):
                 return JSONResponse({"detail": "Method not allowed"}, status_code=405)
             if not pin or not phone_ip or not device_id:
                 return JSONResponse({"detail": "Phone PIN, device IP and device ID are required"}, status_code=400)
+            web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
+            if not web_client_id:
+                return JSONResponse({"detail": "Web client ID is required"}, status_code=400)
             attempt_key = _attempt_key(request, device_id)
             if not _record_attempt(attempt_key):
                 return JSONResponse({"detail": "Too many PIN attempts; try again later"}, status_code=429)
@@ -452,27 +455,20 @@ def install(app):
             # The user must start it explicitly from the Android Server page.
             state, phone_cookie, request_id = await asyncio.to_thread(_verify_phone_pin, phone_ips, pin)
             if state == "pending" and request_id:
-                web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
-                if not web_client_id:
-                    return JSONResponse({"detail": "Web client ID is required"}, status_code=400)
                 _pending_web_pairs[request_id] = {
                     "device_id": device_id,
                     "phone_ip": phone_ips[0] if phone_ips else phone_ip,
                     "phone_ips": phone_ips,
                     "web_client_id": web_client_id,
                     "attempt_key": attempt_key,
-                    "attempt_key": _attempt_key(request, device_id),
                     "created_at": time.time(),
                 }
                 return JSONResponse({"paired": False, "pending": True, "request_id": request_id, "message": "Approve the pairing request on the phone"}, status_code=202)
             if state == "invalid":
-                _clear_attempts(attempt_key)
                 return JSONResponse({"detail": "Invalid phone PIN", "code": "PHONE_PIN_INVALID", "hint": "This field requires the selected phone's Embedded Server PIN, not the PC Server PIN."}, status_code=403)
             if state == "unreachable":
-                _clear_attempts(attempt_key)
                 return JSONResponse({"detail": "Phone embedded server could not be reached"}, status_code=503)
             if state != "approved":
-                _clear_attempts(attempt_key)
                 return JSONResponse({"detail": "Phone pairing failed"}, status_code=502)
             _clear_attempts(attempt_key)
             now = time.time()
