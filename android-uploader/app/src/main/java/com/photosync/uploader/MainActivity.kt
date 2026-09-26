@@ -47,6 +47,8 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
     private val client = OkHttpClient.Builder()
@@ -67,6 +69,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mainScroll: ScrollView
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
+    private val ioExecutor: ExecutorService = Executors.newFixedThreadPool(4)
     @Volatile private var socketGeneration = 0L
     private val reconnectRunnable = Runnable {
         if (started && connectionEnabled && !embeddedStarting && backendServerUrl.isNotBlank() && socket == null) {
@@ -690,7 +693,7 @@ class MainActivity : AppCompatActivity() {
 
             // The PC server PIN can change after the server restarts or after a
             // manual refresh. Never trust a stale value from preferences/QR.
-            Thread {
+            ioExecutor.execute {
                 try {
                     val request = Request.Builder().url("$normalized/api/server-pin?ts=" + System.currentTimeMillis()).get().build()
                     client.newCall(request).execute().use { response ->
@@ -732,6 +735,11 @@ class MainActivity : AppCompatActivity() {
             status.text = "Invalid or unavailable server URL"
         }
     }
+    override fun onDestroy() {
+        ioExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
     private fun wsUrl(baseUrl: String = currentServerUrl()): String {
         val base = baseUrl.trim().removeSuffix("/")
         val id = URLEncoder.encode(deviceIdentity.id, "UTF-8")
@@ -1282,25 +1290,72 @@ class MainActivity : AppCompatActivity() {
         if (currentServerUrl().isBlank() || path.isBlank()) { Toast.makeText(this, "Server not connected", Toast.LENGTH_SHORT).show(); return }
         val fullUrl = buildFileUrl(path); val progressKey = "download_${System.nanoTime()}"
         runOnUiThread { ensureProgressRow(receivedFilesContainer, progressKey, "Downloading $name") }
-        Thread {
+        ioExecutor.execute {
             try {
                 client.newCall(requestBuilder(fullUrl).get().build()).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
-                    val body = response.body ?: error("Empty file"); val total = body.contentLength(); var received = 0L
-                    val values = ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, name); put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" }); put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS); put(MediaStore.Downloads.IS_PENDING, 1) }
-                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Cannot create download")
+                    val body = response.body ?: error("Empty file")
+                    val total = body.contentLength()
+                    var received = 0L
+                    var uri: Uri? = null
+                    var legacyFile: File? = null
+
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        val values = ContentValues().apply {
+                            put(MediaStore.Downloads.DISPLAY_NAME, name)
+                            put(MediaStore.Downloads.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+                            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                            put(MediaStore.Downloads.IS_PENDING, 1)
+                        }
+                        uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                            ?: error("Cannot create download")
+                    } else {
+                        val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                            ?: error("Downloads directory unavailable")
+                        dir.mkdirs()
+                        legacyFile = File(dir, name.substringAfterLast('/').substringAfterLast('\\'))
+                    }
+
                     try {
-                        contentResolver.openOutputStream(uri).use { output -> requireNotNull(output) { "Cannot open download" }; body.byteStream().use { input ->
-                            val buffer = ByteArray(64 * 1024)
-                            while (true) { val read = input.read(buffer); if (read <= 0) break; output!!.write(buffer, 0, read); received += read; if (total > 0) handler.post { activeProgressRows[progressKey]?.findViewWithTag<ProgressBar>("progress_bar")?.progress = ((received * 100L) / total).toInt().coerceIn(0, 100) } }
-                        } }
-                        contentResolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
+                        body.byteStream().use { input ->
+                            val output = if (uri != null) {
+                                contentResolver.openOutputStream(uri!!)?.also { } ?: error("Cannot open download")
+                            } else {
+                                legacyFile!!.outputStream()
+                            }
+                            output.use { out ->
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read <= 0) break
+                                    out.write(buffer, 0, read)
+                                    received += read
+                                    if (total > 0) handler.post {
+                                        activeProgressRows[progressKey]?.findViewWithTag<ProgressBar>("progress_bar")?.progress =
+                                            ((received * 100L) / total).toInt().coerceIn(0, 100)
+                                    }
+                                }
+                            }
+                        }
+
+                        if (uri != null) {
+                            contentResolver.update(uri!!, ContentValues().apply {
+                                put(MediaStore.Downloads.IS_PENDING, 0)
+                            }, null, null)
+                        }
                         runOnUiThread { Toast.makeText(this, "Downloaded: $name", Toast.LENGTH_SHORT).show() }
-                    } catch (e: Exception) { contentResolver.delete(uri, null, null); throw e }
+                    } catch (e: Exception) {
+                        uri?.let { contentResolver.delete(it, null, null) }
+                        legacyFile?.delete()
+                        throw e
+                    }
                 }
-            } catch (e: Exception) { runOnUiThread { Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() } }
-            finally { runOnUiThread { removeProgressRow(progressKey) } }
-        }.start()
+            } catch (e: Exception) {
+                runOnUiThread { Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() }
+            } finally {
+                runOnUiThread { removeProgressRow(progressKey) }
+            }
+        }
     }
 
     private class UriStreamRequestBody(
