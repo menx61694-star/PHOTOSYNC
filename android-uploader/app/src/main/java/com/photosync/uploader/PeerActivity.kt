@@ -30,6 +30,8 @@ import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class PeerActivity : AppCompatActivity() {
@@ -58,6 +60,7 @@ class PeerActivity : AppCompatActivity() {
     private var tcpServer: ServerSocket? = null
     private var udpSocket: DatagramSocket? = null
     private var selectedPeer: Peer? = null
+    private var receiveExecutor: ExecutorService? = null
 
     private data class Peer(
         val name: String,
@@ -121,6 +124,8 @@ class PeerActivity : AppCompatActivity() {
         }
         tcpServer = null
         udpSocket = null
+        receiveExecutor?.shutdownNow()
+        receiveExecutor = null
         discoveryRunning.set(false)
         super.onStop()
     }
@@ -140,6 +145,8 @@ class PeerActivity : AppCompatActivity() {
                 server.reuseAddress = true
                 server.bind(InetSocketAddress(0))
                 tcpServer = server
+                receiveExecutor?.shutdownNow()
+                receiveExecutor = Executors.newFixedThreadPool(4)
 
                 runOnUiThread {
                     if (running) status.text = "Ready • Direct transfer enabled"
@@ -151,7 +158,13 @@ class PeerActivity : AppCompatActivity() {
                     } catch (_: Exception) {
                         break
                     }
-                    Thread { receiveFile(client) }.start()
+                    val workers = receiveExecutor
+                    if (workers != null && !workers.isShutdown) {
+                        try { workers.execute { receiveFile(client) } }
+                        catch (_: Throwable) { try { client.close() } catch (_: Exception) {} }
+                    } else {
+                        try { client.close() } catch (_: Exception) {}
+                    }
                 }
             } catch (e: Exception) {
                 if (running) {
@@ -247,7 +260,7 @@ class PeerActivity : AppCompatActivity() {
 
                             val address = packet.address.hostAddress ?: continue
                             val port = json.optInt("port", 0)
-                            if (port <= 0 || address == localIpv4()) continue
+                            if (port <= 0 || isLocalAddress(packet.address)) continue
 
                             val peer = Peer(
                                 json.optString("name", "Android"),
@@ -290,6 +303,20 @@ class PeerActivity : AppCompatActivity() {
             // Return whatever broadcast address was already collected.
         }
         return result.distinctBy { it.hostAddress }
+    }
+
+    private fun isLocalAddress(address: InetAddress): Boolean {
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    if (addresses.nextElement().hostAddress == address.hostAddress) return true
+                }
+            }
+            false
+        } catch (_: Exception) { false }
     }
 
     private fun localIpv4(): String? {
@@ -594,24 +621,36 @@ class PeerActivity : AppCompatActivity() {
 
                 writeAsciiLine(s.getOutputStream(), "READY")
 
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, name)
-                    put(MediaStore.Downloads.MIME_TYPE, mime)
-                    put(
-                        MediaStore.Downloads.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS + "/PhotoSync"
-                    )
-                    put(MediaStore.Downloads.IS_PENDING, 1)
+                var destination: Uri? = null
+                var legacyFile: File? = null
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, name)
+                        put(MediaStore.Downloads.MIME_TYPE, mime)
+                        put(
+                            MediaStore.Downloads.RELATIVE_PATH,
+                            Environment.DIRECTORY_DOWNLOADS + "/PhotoSync"
+                        )
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    destination = contentResolver.insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        values
+                    ) ?: error("Cannot create destination")
+                } else {
+                    val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                        ?: error("Downloads directory unavailable")
+                    val photoDir = File(dir, "PhotoSync").apply { mkdirs() }
+                    legacyFile = File(photoDir, name.substringAfterLast('/').substringAfterLast('\\'))
                 }
 
-                val destination = contentResolver.insert(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    values
-                ) ?: error("Cannot create destination")
-
                 try {
-                    contentResolver.openOutputStream(destination).use { output ->
-                        requireNotNull(output) { "Cannot open destination" }
+                    val output = if (destination != null) {
+                        contentResolver.openOutputStream(destination!!)?.also { } ?: error("Cannot open destination")
+                    } else {
+                        legacyFile!!.outputStream()
+                    }
+                    output.use { out ->
 
                         var received = 0L
                         val buffer = ByteArray(64 * 1024)
@@ -620,7 +659,7 @@ class PeerActivity : AppCompatActivity() {
                             val read = input.read(buffer, 0, toRead)
                             if (read <= 0) error("Connection closed during transfer")
 
-                            output.write(buffer, 0, read)
+                            out.write(buffer, 0, read)
                             received += read
 
                             val percent = ((received * 100L) / size)
@@ -636,14 +675,14 @@ class PeerActivity : AppCompatActivity() {
                         output.flush()
                     }
 
-                    contentResolver.update(
-                        destination,
-                        ContentValues().apply {
-                            put(MediaStore.Downloads.IS_PENDING, 0)
-                        },
-                        null,
-                        null
-                    )
+                    if (destination != null) {
+                        contentResolver.update(
+                            destination!!,
+                            ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
+                            null,
+                            null
+                        )
+                    }
 
                     runOnUiThread {
                         addTransferRow(
@@ -657,7 +696,8 @@ class PeerActivity : AppCompatActivity() {
                         status.text = "Received ✓ $name"
                     }
                 } catch (e: Exception) {
-                    contentResolver.delete(destination, null, null)
+                    destination?.let { contentResolver.delete(it, null, null) }
+                    legacyFile?.delete()
                     throw e
                 }
             }
