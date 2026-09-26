@@ -14,7 +14,13 @@ import java.security.MessageDigest
  * create duplicate copies of the original uploaded/downloaded files.
  */
 class ThumbnailCache(cacheDir: File) {
+    private companion object {
+        const val MAX_CACHE_BYTES = 50L * 1024L * 1024L
+        const val MAX_CACHE_ITEMS = 500
+    }
+
     private val directory = File(cacheDir, "photosync_thumbnails").apply { mkdirs() }
+    private val lock = Any()
 
     fun get(key: String): Bitmap? {
         val file = cacheFile(key)
@@ -22,6 +28,8 @@ class ThumbnailCache(cacheDir: File) {
         return try {
             FileInputStream(file).use { input ->
                 BitmapFactory.decodeStream(input)
+            }.also {
+                if (it != null) file.setLastModified(System.currentTimeMillis())
             }
         } catch (_: Exception) {
             null
@@ -30,7 +38,7 @@ class ThumbnailCache(cacheDir: File) {
 
     fun put(key: String, bitmap: Bitmap): Boolean {
         val target = cacheFile(key)
-        val temporary = File(target.parentFile, "${target.name}.tmp")
+        val temporary = File(target.parentFile, "${target.name}_${System.nanoTime()}.tmp")
         return try {
             FileOutputStream(temporary).use { output ->
                 if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)) {
@@ -42,6 +50,7 @@ class ThumbnailCache(cacheDir: File) {
                 temporary.delete()
                 return false
             }
+            evictIfNeeded()
             true
         } catch (_: Exception) {
             temporary.delete()
@@ -51,6 +60,21 @@ class ThumbnailCache(cacheDir: File) {
 
     fun clear() {
         directory.listFiles()?.forEach { it.delete() }
+    }
+
+    private fun evictIfNeeded() {
+        synchronized(lock) {
+            val files = directory.listFiles()?.filter { it.isFile && !it.name.endsWith(".tmp") } ?: return
+            var totalBytes = files.sumOf { it.length() }
+            if (files.size <= MAX_CACHE_ITEMS && totalBytes <= MAX_CACHE_BYTES) return
+
+            val oldestFirst = files.sortedBy { it.lastModified() }
+            for (file in oldestFirst) {
+                if (files.size <= MAX_CACHE_ITEMS && totalBytes <= MAX_CACHE_BYTES) break
+                val length = file.length()
+                if (file.delete()) totalBytes -= length
+            }
+        }
     }
 
     private fun cacheFile(key: String): File = File(directory, sha256(key) + ".jpg")
