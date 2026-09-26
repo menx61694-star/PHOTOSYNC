@@ -427,71 +427,23 @@ def install(app):
     async def pin_gate(request: Request, call_next):
         path = request.url.path
         if path == "/web-client/pair":
-            pin = request.headers.get(_PAIR_PIN_HEADER, "").strip()
-            phone_ip = request.headers.get(_PAIR_IP_HEADER, "").strip()
-            device_id = request.headers.get(_PAIR_DEVICE_HEADER, "").strip()
-            # Prefer the live WebSocket peer, but retain Android's
-            # advertised Wi-Fi address as a fallback when VPN/virtual routing
-            # makes the peer address unsuitable for HTTP back to the phone.
-            phone_ips = [phone_ip]
-            if device_id:
-                try:
-                    import main as server_main
-                    manager = getattr(server_main, "manager", None)
-                    if manager and device_id in manager.devices():
-                        live_ip = manager.ip_for_device(device_id)
-                        advertised_ip = manager.advertised_ip_for_device(device_id)
-                        phone_ips = [live_ip, advertised_ip]
-                except Exception:
-                    pass
-            if request.method != "POST":
-                return JSONResponse({"detail": "Method not allowed"}, status_code=405)
-            if not pin or not phone_ip or not device_id:
-                return JSONResponse({"detail": "Phone PIN, device IP and device ID are required"}, status_code=400)
-            web_client_id = request.headers.get(_PAIR_CLIENT_HEADER, "").strip()
-            if not web_client_id:
-                return JSONResponse({"detail": "Web client ID is required"}, status_code=400)
-            attempt_key = _attempt_key(request, device_id)
-            if not _record_attempt(attempt_key):
-                return JSONResponse({"detail": "Too many PIN attempts; try again later"}, status_code=429)
-            # Embedded Server and PC Server are intentionally separate.
-            # Browser pairing must never start the Embedded Server implicitly.
-            # The user must start it explicitly from the Android Server page.
-            state, phone_cookie, request_id = await asyncio.to_thread(_verify_phone_pin, phone_ips, pin)
-            if state == "pending" and request_id:
-                _pending_web_pairs[request_id] = {
-                    "device_id": device_id,
-                    "phone_ip": phone_ips[0] if phone_ips else phone_ip,
-                    "phone_ips": phone_ips,
-                    "web_client_id": web_client_id,
-                    "attempt_key": attempt_key,
-                    "created_at": time.time(),
-                }
-                return JSONResponse({"paired": False, "pending": True, "request_id": request_id, "message": "Approve the pairing request on the phone"}, status_code=202)
-            if state == "invalid":
-                return JSONResponse({"detail": "Invalid phone PIN", "code": "PHONE_PIN_INVALID", "hint": "This field requires the selected phone's Embedded Server PIN, not the PC Server PIN."}, status_code=403)
-            if state == "unreachable":
-                return JSONResponse({"detail": "Phone embedded server could not be reached"}, status_code=503)
-            if state != "approved":
-                return JSONResponse({"detail": "Phone pairing failed"}, status_code=502)
-            _clear_attempts(attempt_key)
-            now = time.time()
-            token = secrets.token_urlsafe(32)
-            with _lock:
-                _sessions[token] = {
-                    "expires": now + SESSION_TTL_SECONDS,
-                    "device_id": device_id,
-                    "phone_cookie": phone_cookie or "",
-                    "phone_ip": phone_ip,
-                }
-            request.state.photosync_phone_cookie = phone_cookie or ""
-            request.state.photosync_session_token = token
-            response = await call_next(request)
-            if response.status_code < 400:
-                _set_session_cookie(response, token)
-                _set_session_header(response, token)
+            if request.method != "POST": return JSONResponse({"detail":"Method not allowed"},status_code=405)
+            device_id=(request.headers.get(_PAIR_DEVICE_HEADER) or "").strip();web_client_id=(request.headers.get(_PAIR_CLIENT_HEADER) or "").strip()
+            if not device_id or not web_client_id: return JSONResponse({"detail":"Web client ID and device ID are required"},status_code=400)
+            try:
+                import main as server_main
+                manager=getattr(server_main,"manager",None)
+                if manager is None or device_id not in manager.devices(): return JSONResponse({"detail":"Selected phone is not connected"},status_code=409)
+            except Exception: return JSONResponse({"detail":"Selected phone is not connected"},status_code=409)
+            old_token=_request_session(request)
+            if valid_session(old_token) and session_device(old_token)==device_id: token=old_token
             else:
-                revoke_session(token)
+                token=secrets.token_urlsafe(32)
+                with _lock: _sessions[token]={"expires":time.time()+SESSION_TTL_SECONDS,"device_id":device_id,"phone_cookie":"","phone_ip":""}
+            request.state.photosync_phone_cookie="";request.state.photosync_session_token=token
+            response=await call_next(request)
+            if response.status_code<400: _set_session_cookie(response,token);_set_session_header(response,token)
+            elif token!=old_token: revoke_session(token)
             return response
 
         if path in _PUBLIC_EXACT or any(path == prefix or path.startswith(prefix + "/") for prefix in _PUBLIC_PREFIXES):
