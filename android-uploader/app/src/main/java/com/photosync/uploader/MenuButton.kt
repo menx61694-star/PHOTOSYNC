@@ -8,6 +8,8 @@ import android.util.AttributeSet
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.app.Activity
+import android.content.ContextWrapper
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.TextView
@@ -86,7 +88,12 @@ class MenuButton @JvmOverloads constructor(
         root.addView(divider)
 
         addItem(root, "⌂", "Home", accent) {
-            if (context !is MainActivity) context.startActivity(Intent(context, MainActivity::class.java))
+            val activity = getActivity(context)
+            if (activity !is MainActivity) {
+                activity?.startActivity(Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                })
+            }
         }
         addItem(root, "⚙", "Settings", accent) {
             context.startActivity(Intent(context, SettingsActivity::class.java))
@@ -141,6 +148,12 @@ class MenuButton @JvmOverloads constructor(
             }
         })
         root.addView(row)
+    }
+
+    private fun getActivity(context: Context): Activity? = when (context) {
+        is Activity -> context
+        is ContextWrapper -> getActivity(context.baseContext)
+        else -> null
     }
 
     private fun rounded(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {
