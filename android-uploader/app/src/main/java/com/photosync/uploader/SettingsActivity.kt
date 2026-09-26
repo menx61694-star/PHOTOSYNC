@@ -36,7 +36,11 @@ class SettingsActivity : AppCompatActivity() {
         root.addView(settingButton("Theme colour", false) { chooseTheme() })
         root.addView(settingButton("Connection / Server", false) { startActivity(Intent(this, MainActivity::class.java)); finish() })
         root.addView(settingButton("Clear saved server", false) {
-            prefs.edit().remove("server_url").apply()
+            prefs.edit()
+                .remove("server_url")
+                .remove("backend_server_url")
+                .remove("server_pin")
+                .apply()
             Toast.makeText(this, "Saved server cleared", Toast.LENGTH_SHORT).show()
         })
         root.addView(settingButton("Feedback", false) { startActivity(Intent(this, FeedbackActivity::class.java)) })
