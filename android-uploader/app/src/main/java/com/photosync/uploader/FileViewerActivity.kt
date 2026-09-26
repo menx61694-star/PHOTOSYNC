@@ -24,6 +24,7 @@ class FileViewerActivity : AppCompatActivity() {
     private var pdfRenderer: PdfRenderer? = null
     private var pdfFile: File? = null
     private var pdfPage = 0
+    private var player: MediaPlayer? = null
     private lateinit var content: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,7 +56,6 @@ class FileViewerActivity : AppCompatActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
         val label = TextView(this).apply { text = "Audio"; textSize = 22f; setTextColor(0xFFFFFFFF.toInt()); gravity = Gravity.CENTER }
         val button = Button(this).apply { text = "Play" }
-        var player: MediaPlayer? = null
         button.setOnClickListener {
             try {
                 if (player?.isPlaying == true) { player?.pause(); button.text = "Play" }
@@ -74,7 +74,8 @@ class FileViewerActivity : AppCompatActivity() {
                 val request = Request.Builder().url(url).build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
-                    val file = File(cacheDir, "viewer_${System.currentTimeMillis()}_$name")
+                    val safeName = name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file.pdf" }
+                    val file = File(cacheDir, "viewer_${System.currentTimeMillis()}_$safeName")
                     FileOutputStream(file).use { out -> response.body?.byteStream()?.copyTo(out) }
                     runOnUiThread { openPdf(file) }
                 }
@@ -85,6 +86,9 @@ class FileViewerActivity : AppCompatActivity() {
     private fun openPdf(file: File) {
         pdfFile = file
         pdfRenderer = PdfRenderer(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY))
+        if (pdfRenderer?.pageCount == 0) {
+            pdfRenderer?.close(); pdfRenderer = null; file.delete(); finish(); return
+        }
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         controls.addView(Button(this).apply { text = "‹"; setOnClickListener { renderPdfPage(pdfPage - 1) } })
         controls.addView(Button(this).apply { text = "›"; setOnClickListener { renderPdfPage(pdfPage + 1) } })
@@ -97,7 +101,16 @@ class FileViewerActivity : AppCompatActivity() {
         if (index !in 0 until renderer.pageCount) return
         pdfPage = index
         val page = renderer.openPage(index)
-        val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
+        val maxDimension = 1800
+        val scale = minOf(2f, maxDimension.toFloat() / maxOf(page.width, page.height).toFloat())
+        val width = (page.width * scale).toInt().coerceAtLeast(1)
+        val height = (page.height * scale).toInt().coerceAtLeast(1)
+        val bitmap = try {
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        } catch (_: OutOfMemoryError) {
+            page.close()
+            return
+        }
         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
         page.close()
         val image = content.findViewWithTag<ImageView>("pdf") ?: ImageView(this).also {
@@ -107,6 +120,11 @@ class FileViewerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        player?.let { mp ->
+            try { mp.stop() } catch (_: Exception) {}
+            mp.release()
+        }
+        player = null
         pdfRenderer?.close(); pdfRenderer = null; pdfFile?.delete(); super.onDestroy()
     }
 }
