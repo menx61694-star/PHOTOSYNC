@@ -14,6 +14,7 @@ import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
+import java.io.PushbackInputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -184,14 +185,18 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                 it.soTimeout = 5 * 60 * 1000
                 it.receiveBufferSize = 1024 * 1024
                 it.sendBufferSize = 1024 * 1024
-                val input = BufferedInputStream(it.getInputStream(), 64 * 1024)
+                val input = PushbackInputStream(BufferedInputStream(it.getInputStream(), 64 * 1024), 128 * 1024)
                 val request = readLine(input) ?: return
                 val headers = mutableMapOf<String, String>()
                 while (true) {
                     val line = readLine(input) ?: break
                     if (line.isEmpty()) break
                     val c = line.indexOf(':')
-                    if (c > 0) headers[line.substring(0, c).trim().lowercase()] = line.substring(c + 1).trim()
+                    if (c > 0) {
+                        val key = line.substring(0, c).trim().lowercase()
+                        val value = line.substring(c + 1).trim()
+                        headers[key] = headers[key]?.let { existing -> "$existing; $value" } ?: value
+                    }
                 }
                 val parts = request.split(' ')
                 val method = parts.getOrNull(0) ?: ""
@@ -476,15 +481,20 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             val index = indexOf(combined, marker)
             if (index >= 0) {
                 output.write(combined, 0, index)
-                val suffix = ByteArray(2)
-                var got = 0
-                while (got < 2) {
-                    val n = input.read(suffix, got, 2 - got)
-                    if (n <= 0) return false
-                    got += n
+                val suffixIndex = index + marker.size
+                if (combined.size < suffixIndex + 2) return false
+                val finalBoundary = combined[suffixIndex].toInt() == '-'.code && combined[suffixIndex + 1].toInt() == '-'.code
+                val nextStart = suffixIndex + 2
+                if (!finalBoundary) {
+                    if (combined.size > nextStart) {
+                        val pushback = input as? PushbackInputStream ?: return false
+                        val remaining = combined.copyOfRange(nextStart, combined.size)
+                        if (remaining.size > 128 * 1024) return false
+                        pushback.unread(remaining)
+                    }
                 }
                 output.flush()
-                return suffix[0].toInt() == '-'.code && suffix[1].toInt() == '-'.code
+                return finalBoundary
             }
 
             val keep = minOf(marker.size - 1, combined.size)
