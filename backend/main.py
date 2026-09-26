@@ -508,9 +508,11 @@ def _account_user(token):
         return None
     now=time.time()
     with _account_session_lock:
+        expired=[key for key,value in _account_sessions.items() if value.get('expires',0)<=now]
+        for key in expired:
+            _account_sessions.pop(key,None)
         data=_account_sessions.get(token)
-        if not data or data.get('expires',0)<=now:
-            _account_sessions.pop(token,None)
+        if not data:
             return None
         return data.get('username')
 
