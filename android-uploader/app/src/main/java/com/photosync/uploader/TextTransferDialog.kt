@@ -192,10 +192,11 @@ object TextTransferDialog {
 
     private fun send(context: Context, text: String, dialog: AlertDialog) {
         val prefs = context.getSharedPreferences("photosync", Context.MODE_PRIVATE)
+        val app = context.applicationContext as? PhotoSyncApplication
+        val local = app?.localServer?.isRunning() == true
         val saved = prefs.getString("server_url", "")?.trim()?.removeSuffix("/") ?: ""
         val backend = prefs.getString("backend_server_url", "")?.trim()?.removeSuffix("/") ?: ""
-        val local = saved.contains(":18000")
-        val target = if (local || backend.isBlank()) saved else backend
+        val target = if (local) app?.localServer?.url()?.trim()?.removeSuffix("/") ?: "" else backend.ifBlank { saved }
         if (target.isBlank()) { ToastCompat.show(context, "Connect to a PhotoSync server first"); return }
 
         Thread {
