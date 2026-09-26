@@ -3,6 +3,7 @@ package com.photosync.uploader
 import android.content.Context
 import android.util.AttributeSet
 import android.view.View
+import android.view.ViewGroup
 import android.widget.LinearLayout
 
 /** Keeps active transfer rows during the periodic file-list refresh. */
@@ -27,6 +28,13 @@ class TransferContainerLayout @JvmOverloads constructor(
         removeAllViews()
     }
 
-    private fun containsProgressBar(view: View): Boolean =
-        view.findViewWithTag<View>("progress_bar") != null
+    private fun containsProgressBar(view: View): Boolean {
+        if (view.getTag() == "progress_bar") return true
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) {
+                if (containsProgressBar(view.getChildAt(index))) return true
+            }
+        }
+        return false
+    }
 }
