@@ -13,8 +13,4 @@ class PhotoSyncApplication : Application() {
         localServer = LocalServer(this, 18000)
     }
 
-    override fun onTerminate() {
-        if (::localServer.isInitialized) localServer.stop()
-        super.onTerminate()
-    }
 }
