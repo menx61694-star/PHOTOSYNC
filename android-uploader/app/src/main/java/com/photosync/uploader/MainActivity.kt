@@ -462,9 +462,7 @@ class MainActivity : AppCompatActivity() {
     fun onEmbeddedStopRequested() {
         try {
             localServer.stop()
-            prefs.edit().remove("embedded_server_url").remove("server_url").remove("backend_server_url").remove("server_pin").apply()
-            backendServerUrl = ""
-            serverUrlInput.setText("")
+            prefs.edit().remove("embedded_server_url").apply()
             serverStatus.text = "No server selected"
             status.text = "Embedded server stopped"
             refreshHomeServerSummary()
@@ -553,8 +551,7 @@ class MainActivity : AppCompatActivity() {
     private fun selectEmbeddedServer(url: String) {
         connectionEnabled = true
         val normalized = url.trim().removeSuffix("/")
-        prefs.edit().putString("server_url", normalized).apply()
-        serverUrlInput.setText(normalized)
+        prefs.edit().putString("embedded_server_url", normalized).apply()
         serverStatus.text = "● Local Server: Checking…"
         status.text = "Checking Android local server…"
         Thread {
