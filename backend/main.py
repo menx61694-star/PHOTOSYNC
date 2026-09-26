@@ -4,6 +4,7 @@ import asyncio
 import http.client
 import re, json, socket, threading, hashlib, secrets, io, ipaddress
 from datetime import datetime, timezone
+import time
 from urllib.parse import quote
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
 import qrcode
@@ -42,7 +43,16 @@ def _load_accounts():
             data=json.load(f); return data if isinstance(data,dict) else {}
     except (FileNotFoundError,json.JSONDecodeError): return {}
 def _save_accounts(accounts):
-    tmp=ACCOUNTS_FILE.with_suffix('.tmp'); tmp.write_text(json.dumps(accounts,ensure_ascii=False,indent=2),encoding='utf-8'); tmp.replace(ACCOUNTS_FILE)
+    payload=json.dumps(accounts,ensure_ascii=False,indent=2)
+    tmp=ACCOUNTS_FILE.with_suffix('.tmp')
+    for attempt in range(5):
+        try:
+            tmp.write_text(payload,encoding='utf-8')
+            tmp.replace(ACCOUNTS_FILE)
+            return
+        except PermissionError:
+            if attempt == 4: raise
+            time.sleep(0.05 * (attempt + 1))
 def _password_hash(password,salt=None):
     salt=salt or secrets.token_bytes(16); digest=hashlib.pbkdf2_hmac('sha256',password.encode(),salt,120000); return salt.hex(),digest.hex()
 def _verify_password(password,salt_hex,digest_hex):
@@ -71,7 +81,16 @@ def read_json(path,default):
         data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else default; return data
     except (OSError,json.JSONDecodeError):return default
 def write_json(path,data):
-    tmp=path.with_suffix(path.suffix+'.tmp'); tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8'); tmp.replace(path)
+    payload=json.dumps(data,ensure_ascii=False,indent=2)
+    tmp=path.with_suffix(path.suffix+'.tmp')
+    for attempt in range(5):
+        try:
+            tmp.write_text(payload,encoding='utf-8')
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == 4: raise
+            time.sleep(0.05 * (attempt + 1))
 def get_web_meta(client_id):
     path=web_meta_path(client_id); meta=read_json(path,{})
     if not isinstance(meta,dict):meta={}
@@ -92,26 +111,33 @@ class ConnectionManager:
         self.connections={}
         self.connection_ips={}
         self.connection_advertised_ips={}
+        self._lock=threading.RLock()
     async def connect(self,ws,device_id,advertised_ip=''):
         await ws.accept()
-        self.connections[ws]=device_id
-        self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
-        self.connection_advertised_ips[ws]=advertised_ip or ''
+        with self._lock:
+            self.connections[ws]=device_id
+            self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
+            self.connection_advertised_ips[ws]=advertised_ip or ''
     def disconnect(self,ws):
-        self.connections.pop(ws,None)
-        self.connection_ips.pop(ws,None)
-        self.connection_advertised_ips.pop(ws,None)
-    def devices(self):return sorted(set(self.connections.values()))
+        with self._lock:
+            self.connections.pop(ws,None)
+            self.connection_ips.pop(ws,None)
+            self.connection_advertised_ips.pop(ws,None)
+    def devices(self):
+        with self._lock:return sorted(set(self.connections.values()))
     def ip_for_device(self,device_id):
-        for ws,did in list(self.connections.items()):
-            if did==device_id:return self.connection_ips.get(ws,'unknown')
+        with self._lock:
+            for ws,did in list(self.connections.items()):
+                if did==device_id:return self.connection_ips.get(ws,'unknown')
         return 'unknown'
     def advertised_ip_for_device(self,device_id):
-        for ws,did in list(self.connections.items()):
-            if did==device_id:return self.connection_advertised_ips.get(ws,'')
+        with self._lock:
+            for ws,did in list(self.connections.items()):
+                if did==device_id:return self.connection_advertised_ips.get(ws,'')
         return ''
     async def disconnect_all(self, code=1008, reason='Server pairing PIN refreshed'):
-        sockets=list(self.connections.keys())
+        with self._lock:
+            sockets=list(self.connections.keys())
         for ws in sockets:
             try:
                 await ws.close(code=code, reason=reason)
@@ -124,15 +150,18 @@ class ConnectionManager:
             except Exception:
                 pass
     async def send_to_device(self,device_id,message):
+        with self._lock:
+            targets=[ws for ws,did in self.connections.items() if did==device_id]
         dead=[]
-        for ws,did in list(self.connections.items()):
-            if did!=device_id:continue
+        for ws in targets:
             try:await ws.send_json(message)
             except Exception:dead.append(ws)
         for ws in dead:self.disconnect(ws)
     async def broadcast(self,message):
+        with self._lock:
+            targets=list(self.connections)
         dead=[]
-        for ws in list(self.connections):
+        for ws in targets:
             try:await ws.send_json(message)
             except Exception:dead.append(ws)
         for ws in dead:self.disconnect(ws)
@@ -291,9 +320,13 @@ def web_client_files(web_client_id:str,kind:str='sent'):
     if kind not in {'sent','received'}:raise HTTPException(400,'invalid kind')
     get_web_meta(web_client_id);return read_json(web_history_path(web_client_id,kind),[])
 @app.get('/web-client/file/{web_client_id}/{device_id}/{source}/{filename}')
-def web_client_file(web_client_id:str,device_id:str,source:str,filename:str):
+def web_client_file(request:Request,web_client_id:str,device_id:str,source:str,filename:str):
     cid=safe_device_id(web_client_id);did=safe_device_id(device_id);filename=Path(filename).name
     if source not in {'app','received','web'}:raise HTTPException(404,'Not found')
+    session_token=request.cookies.get('photosync_session') or request.headers.get('X-PhotoSync-Session','') or request.query_params.get('session','')
+    from pin_auth import session_device
+    if session_device(session_token) != did:
+        raise HTTPException(403,'Access denied to foreign device files')
     get_web_meta(cid);allowed=False
     for kind in ('sent','received'):
         for item in read_json(web_history_path(cid,kind),[]):
@@ -398,9 +431,11 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
     folder = uploads if source == 'app' else downloads
     original = safe_name(filename)
     transfer_id = uuid4().hex
-    total = int(request.headers.get('content-length') or 0)
-    if total <= 0:
-        raise HTTPException(411, 'Content-Length required')
+    content_length = request.headers.get('content-length')
+    try:
+        total = int(content_length) if content_length else 0
+    except ValueError:
+        raise HTTPException(400, 'Invalid Content-Length')
 
     destination = folder / f'{transfer_id}__{source}__{owner}__{original}'
     received = 0
@@ -428,15 +463,17 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
                             'total':total,
                             'percent':percent
                         })
-            if received != total:
+            if total > 0 and received != total:
                 raise HTTPException(400, 'Incomplete upload')
-    except HTTPException:
+    except HTTPException as exc:
         try: destination.unlink(missing_ok=True)
         except Exception: pass
+        await manager.send_to_device(owner, {'type':'upload_failed','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'error':str(exc.detail)})
         raise
     except Exception as exc:
         try: destination.unlink(missing_ok=True)
         except Exception: pass
+        await manager.send_to_device(owner, {'type':'upload_failed','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'error':str(exc)})
         raise HTTPException(500, f'Stream upload failed: {exc}')
 
     info = file_info(destination, source, owner)
@@ -469,6 +506,7 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
             if not cookie:raise HTTPException(403,'Phone must be paired again before sending files')
             await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':0,'total':total_size,'percent':0})
             try:
+                await file.seek(0)
                 phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,file.file,total_size,file.content_type or 'application/octet-stream')
             except Exception as exc:
                 raise HTTPException(502,f'Phone transfer failed: {exc}')
