@@ -834,7 +834,15 @@ class MainActivity : AppCompatActivity() {
                         serverStatus.text = "● Server: Disconnected"
                     }
                 }
-                if (isCurrent) scheduleReconnect()
+                if (isCurrent) {
+                    val authFailure = code == 1008 &&
+                        reason.contains("pairing PIN", ignoreCase = true)
+                    if (authFailure) {
+                        refreshPcPairingPinAndReconnect(base)
+                    } else {
+                        scheduleReconnect()
+                    }
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
