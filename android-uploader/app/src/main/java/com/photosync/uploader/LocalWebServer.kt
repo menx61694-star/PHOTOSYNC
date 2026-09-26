@@ -560,6 +560,36 @@ class LocalWebServer(private val context: Context, private val port: Int) {
         }
     }
 
+    private val relayFiles = ConcurrentHashMap<String, File>()
+
+    @Synchronized
+    fun receiveWebRelayChunk(transferId: String, filename: String, data: ByteArray, complete: Boolean): JSONObject? {
+        val id = safeName(transferId)
+        require(id.isNotBlank()) { "Invalid transfer id" }
+        val name = safeName(filename)
+        require(name.isNotBlank()) { "Invalid filename" }
+        val temp = relayFiles[id] ?: File(downloads, ".relay_" + id).also {
+            it.parentFile?.mkdirs()
+            relayFiles[id] = it
+        }
+        try {
+            if (data.isNotEmpty()) FileOutputStream(temp, true).use { it.write(data) }
+            if (!complete) return null
+            var target = File(downloads, System.currentTimeMillis().toString() + "__" + name)
+            var n = 1
+            while (target.exists()) target = File(downloads, System.currentTimeMillis().toString() + "__" + (n++) + "__" + name)
+            if (!temp.renameTo(target)) {
+                temp.inputStream().use { input -> target.outputStream().use { output -> input.copyTo(output) } }
+                temp.delete()
+            }
+            relayFiles.remove(id)
+            return fileJson(target, "received")
+        } catch (e: Exception) {
+            if (complete) { relayFiles.remove(id); try { temp.delete() } catch (_: Exception) {} }
+            throw e
+        }
+    }
+
     private fun receiveText(input: InputStream, headers: Map<String, String>): Response {
         val length = headers["content-length"]?.toLongOrNull()
             ?: return json("{\"detail\":\"Content-Length required\"}", "411 Length Required")
