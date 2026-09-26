@@ -435,7 +435,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
             }
 
             val disposition = partHeaders["content-disposition"].orEmpty()
-            val fileMatch = Regex("""filename="([^"]*)"""", RegexOption.IGNORE_CASE).find(disposition)
+            val fileMatch = Regex("filename=\\\"([^\\\"]*)\\\"", RegexOption.IGNORE_CASE).find(disposition)
             val filename = fileMatch?.groupValues?.getOrNull(1)?.let(::safeName)
 
             if (!filename.isNullOrBlank()) {
@@ -451,7 +451,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                     return json(fileJson(target, "received").toString())
                 } catch (e: Exception) {
                     try { target.delete() } catch (_: Exception) {}
-                    return json("{\"detail\":\"${JSONObject.quote(e.message ?: "Multipart upload failed").trim('"')}\"}", "400 Bad Request")
+                    return json(JSONObject().put("detail", e.message ?: "Multipart upload failed").toString(), "400 Bad Request")
                 }
             } else {
                 val ended = copyMultipartPart(input, NullOutputStream(), boundary.toByteArray(Charsets.ISO_8859_1))
@@ -494,7 +494,7 @@ class LocalWebServer(private val context: Context, private val port: Int) {
                     }
                 }
                 output.flush()
-                return finalBoundary
+                return true
             }
 
             val keep = minOf(marker.size - 1, combined.size)
