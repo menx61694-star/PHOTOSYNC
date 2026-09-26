@@ -31,6 +31,9 @@ app.add_middleware(CORSMiddleware,allow_origins=['*'],allow_credentials=True,all
 app.mount('/dashboard',StaticFiles(directory=WEB_DIR,html=True),name='dashboard')
 install_pin_auth(app)
 _accounts_lock=threading.Lock()
+_account_sessions={}
+_account_session_lock=threading.Lock()
+ACCOUNT_SESSION_TTL_SECONDS=24*60*60
 _direct_opener=build_opener(ProxyHandler({}))
 
 def _load_accounts():
@@ -486,6 +489,31 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
                 percent=int(received*100/total)
                 if percent!=last:last=percent;await manager.send_to_device(owner,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'received':received,'total':total,'percent':min(100,percent)})
     info=file_info(destination,stored_source,owner);info['content_type']=file.content_type or 'application/octet-stream';info['transfer_id']=transfer_id;await manager.send_to_device(owner,{'type':'file_uploaded',**info});append_received_to_paired_web_clients(owner,info);return info
+def _account_session_cookie(response, token):
+    response.set_cookie(
+        key='photosync_account_session',
+        value=token,
+        max_age=ACCOUNT_SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite='lax',
+        secure=False,
+        path='/',
+    )
+
+def _account_session_token(request:Request):
+    return request.cookies.get('photosync_account_session','') or request.headers.get('X-PhotoSync-Account-Session','')
+
+def _account_user(token):
+    if not token:
+        return None
+    now=time.time()
+    with _account_session_lock:
+        data=_account_sessions.get(token)
+        if not data or data.get('expires',0)<=now:
+            _account_sessions.pop(token,None)
+            return None
+        return data.get('username')
+
 @app.post('/account/signup')
 def account_signup(name:str=Form(...),mobile:str=Form(...),username:str=Form(...),email:str=Form(...),password:str=Form(...)):
     name=_clean_text(name,80);mobile=re.sub(r'[^0-9+ -]','',mobile or '').strip()[:20];username=re.sub(r'[^A-Za-z0-9_.-]','',username or '').lower()[:32];email=_clean_text(email,160).lower()
@@ -497,11 +525,52 @@ def account_signup(name:str=Form(...),mobile:str=Form(...),username:str=Form(...
         salt,digest=_password_hash(password);accounts[username]={'name':name,'mobile':mobile,'username':username,'email':email,'password_salt':salt,'password_hash':digest,'created_at':datetime.now(timezone.utc).isoformat()};_save_accounts(accounts)
     return {'ok':True,'message':'Account created','account':{'name':name,'mobile':mobile,'username':username,'email':email}}
 @app.post('/account/login')
-def account_login(email:str=Form(...),password:str=Form(...)):
+def account_login(request:Request,email:str=Form(...),password:str=Form(...)):
     email=_clean_text(email,160).lower()
-    with _accounts_lock:accounts=_load_accounts();account=next((a for a in accounts.values() if a.get('email')==email),None)
-    if not account or not _verify_password(password,account.get('password_salt',''),account.get('password_hash','')):raise HTTPException(401,'Invalid email or password')
-    return {'ok':True,'message':'Login successful','account':{k:account.get(k,'') for k in ('name','mobile','username','email')}}
+    with _accounts_lock:
+        accounts=_load_accounts()
+        account=next((a for a in accounts.values() if a.get('email')==email),None)
+    if not account or not _verify_password(password,account.get('password_salt',''),account.get('password_hash','')):
+        raise HTTPException(401,'Invalid email or password')
+    token=secrets.token_urlsafe(32)
+    with _account_session_lock:
+        _account_sessions[token]={
+            'username':account.get('username',''),
+            'expires':time.time()+ACCOUNT_SESSION_TTL_SECONDS,
+        }
+    response=Response(
+        content=json.dumps({
+            'ok':True,
+            'message':'Login successful',
+            'account':{k:account.get(k,'') for k in ('name','mobile','username','email')},
+            'account_session_token':token,
+            'expires_in_seconds':ACCOUNT_SESSION_TTL_SECONDS,
+        }),
+        media_type='application/json',
+    )
+    _account_session_cookie(response,token)
+    return response
+
+@app.get('/account/me')
+def account_me(request:Request):
+    username=_account_user(_account_session_token(request))
+    if not username:
+        raise HTTPException(401,'Account login required')
+    with _accounts_lock:
+        account=_load_accounts().get(username)
+    if not account:
+        raise HTTPException(401,'Account login required')
+    return {'authenticated':True,'account':{k:account.get(k,'') for k in ('name','mobile','username','email')}}
+
+@app.post('/account/logout')
+def account_logout(request:Request):
+    token=_account_session_token(request)
+    if token:
+        with _account_session_lock:
+            _account_sessions.pop(token,None)
+    response=Response(content=json.dumps({'ok':True}),media_type='application/json')
+    response.delete_cookie('photosync_account_session',path='/')
+    return response
 @app.post('/feedback')
 def feedback(message:str=Form(...),email:str=Form(''),username:str=Form('')):
     message=_clean_text(message,2000);email=_clean_text(email,160).lower();username=_clean_text(username,32)
