@@ -13,6 +13,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.view.Gravity
+import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
     private val ioExecutor: ExecutorService = Executors.newFixedThreadPool(4)
     @Volatile private var socketGeneration = 0L
+    private val webRelayNames = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val reconnectRunnable = Runnable {
         if (started && connectionEnabled && !embeddedStarting && backendServerUrl.isNotBlank() && socket == null) {
             connectSocket(backendServerUrl)
@@ -406,10 +408,6 @@ class MainActivity : AppCompatActivity() {
         try {
             connectionEnabled = true
             embeddedStarting = true
-            socket?.close(1000, "Embedded server selected")
-            socket = null
-            backendServerUrl = ""
-            prefs.edit().remove("backend_server_url").remove("server_pin").apply()
             val appServer = localServer
             Thread {
                 try {
@@ -463,8 +461,6 @@ class MainActivity : AppCompatActivity() {
 
     fun onEmbeddedStopRequested() {
         try {
-            socket?.close(1000, "Embedded server stopped")
-            socket = null
             localServer.stop()
             prefs.edit().remove("embedded_server_url").remove("server_url").remove("backend_server_url").remove("server_pin").apply()
             backendServerUrl = ""
@@ -480,7 +476,6 @@ class MainActivity : AppCompatActivity() {
     fun onConnectRequested() {
         try {
             connectionEnabled = true
-            localServer.stop()
             val url = serverUrlInput.text?.toString()?.trim()?.removeSuffix("/") ?: ""
             if (url.isBlank()) {
                 discoverServer()
@@ -499,7 +494,6 @@ class MainActivity : AppCompatActivity() {
         connectionEnabled = false
         handler.removeCallbacks(reconnectRunnable)
         socketGeneration++
-        try { localServer.stop() } catch (_: Throwable) { }
         socket?.close(1000, "User disconnected")
         socket = null
         prefs.edit().remove("server_url").remove("backend_server_url").apply()
@@ -559,8 +553,6 @@ class MainActivity : AppCompatActivity() {
     private fun selectEmbeddedServer(url: String) {
         connectionEnabled = true
         val normalized = url.trim().removeSuffix("/")
-        socket?.close(1000, "Embedded server selected")
-        socket = null
         prefs.edit().putString("server_url", normalized).apply()
         serverUrlInput.setText(normalized)
         serverStatus.text = "● Local Server: Checking…"
@@ -815,7 +807,39 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         }
-                        "prepare_web_pairing" -> { runOnUiThread { status.text = "Start Embedded Server from the Server page before browser pairing"; refreshHomeServerSummary() } }
+                        "web_file_prepare" -> {
+                            val transferId=data.optString("transfer_id","")
+                            val filename=data.optString("filename","Receiving file")
+                            runOnUiThread {
+                                activeReceiveTransfers[transferId]=filename
+                                webRelayNames[transferId]=filename
+                                val row=ensureProgressRow(receivedFilesContainer,transferId,"Receiving $filename")
+                                row.second.progress=0
+                            }
+                        }
+                        "web_file_chunk" -> {
+                            val transferId=data.optString("transfer_id","")
+                            val payload=data.optString("data","")
+                            if(transferId.isBlank() || payload.isBlank()) return
+                            val bytes=Base64.decode(payload,Base64.DEFAULT)
+                            localServer.receiveWebRelayChunk(transferId,webRelayNames[transferId] ?: "received_file",bytes,false)
+                            val percent=data.optInt("percent",0).coerceIn(0,100)
+                            runOnUiThread { activeProgressRows[transferId]?.findViewWithTag<ProgressBar>("progress_bar")?.progress=percent }
+                        }
+                        "web_file_complete" -> {
+                            val transferId=data.optString("transfer_id","")
+                            val filename=data.optString("filename","received_file")
+                            try {
+                                val info=localServer.receiveWebRelayChunk(transferId,filename,ByteArray(0),true)
+                                runOnUiThread {
+                                    activeReceiveTransfers.remove(transferId);webRelayNames.remove(transferId);removeProgressRow(transferId)
+                                    if(info!=null) addFile(info,receivedFilesContainer,"No files received from web yet")
+                                    status.text="Received from PC ✓ " + filename
+                                }
+                            } catch(e:Exception) {
+                                runOnUiThread { activeReceiveTransfers.remove(transferId);webRelayNames.remove(transferId);removeProgressRow(transferId);status.text="PC relay receive failed: " + (e.message ?: "unknown error") }
+                            }
+                        }
                         "file_uploaded" -> {
                             val source = data.optString("source", "unknown")
                             val targetDevice = data.optString("device_id", "")
