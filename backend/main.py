@@ -286,8 +286,34 @@ def server_qr():
 def web_client_session():
     client_id=uuid4().hex;d=web_client_dir(client_id);write_json(d/'client.json',{'created_at':datetime.now(timezone.utc).isoformat(),'paired_device_id':None});write_json(d/'sent.json',[]);write_json(d/'received.json',[]);return {'web_client_id':client_id}
 @app.get('/web-client/state')
-def web_client_state(web_client_id:str):
-    meta=get_web_meta(web_client_id);paired=safe_device_id(meta.get('paired_device_id',''));return {'web_client_id':safe_device_id(web_client_id),'paired_device_id':paired or None,'sent':read_json(web_history_path(web_client_id,'sent'),[]),'received':read_json(web_history_path(web_client_id,'received'),[])}
+def web_client_state(request:Request, web_client_id:str):
+    cid=safe_device_id(web_client_id)
+    meta=get_web_meta(cid)
+    paired=safe_device_id(meta.get('paired_device_id',''))
+    token=_request_session(request)
+    # The web-client metadata is persistent, while the authorization session is
+    # intentionally in-memory/expiring. Never report a stale pairing as active:
+    # otherwise the dashboard can show "Paired" while /upload correctly rejects
+    # the same browser with 401.
+    if paired:
+        if not token or not valid_session(token, paired):
+            return JSONResponse(
+                {
+                    'web_client_id': cid,
+                    'paired_device_id': None,
+                    'sent': read_json(web_history_path(cid,'sent'),[]),
+                    'received': read_json(web_history_path(cid,'received'),[]),
+                    'session_expired': True,
+                },
+                status_code=401,
+            )
+    return {
+        'web_client_id': cid,
+        'paired_device_id': paired or None,
+        'sent': read_json(web_history_path(cid,'sent'),[]),
+        'received': read_json(web_history_path(cid,'received'),[]),
+        'session_expired': False,
+    }
 @app.post('/web-client/pair')
 def web_client_pair(request:Request,web_client_id:str=Form(...),device_id:str=Form(...)):
     cid=safe_device_id(web_client_id);did=safe_device_id(device_id)
