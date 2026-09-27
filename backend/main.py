@@ -152,11 +152,17 @@ class ConnectionManager:
     async def send_to_device(self,device_id,message):
         with self._lock:
             targets=[ws for ws,did in self.connections.items() if did==device_id]
+        delivered=False
         dead=[]
         for ws in targets:
-            try:await ws.send_json(message)
-            except Exception:dead.append(ws)
-        for ws in dead:self.disconnect(ws)
+            try:
+                await ws.send_json(message)
+                delivered=True
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+        return delivered
     async def broadcast(self,message):
         with self._lock:
             targets=list(self.connections)
@@ -405,15 +411,18 @@ async def websocket_endpoint(websocket:WebSocket):
 
 async def _relay_file_to_device(device_id,file_obj,filename,total_size,content_type,transfer_id):
     if total_size<=0: raise RuntimeError('Empty file')
-    await manager.send_to_device(device_id,{'type':'web_file_prepare','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
+    delivered=await manager.send_to_device(device_id,{'type':'web_file_prepare','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
+    if not delivered: raise RuntimeError('Phone relay WebSocket is disconnected')
     file_obj.seek(0);sent=0
     while sent<total_size:
-        chunk=file_obj.read(min(256*1024,total_size-sent))
+        chunk=await asyncio.to_thread(file_obj.read,min(256*1024,total_size-sent))
         if not chunk: raise RuntimeError('Unexpected end of uploaded file')
         sent+=len(chunk)
         data=__import__('base64').b64encode(chunk).decode('ascii')
-        await manager.send_to_device(device_id,{'type':'web_file_chunk','transfer_id':transfer_id,'data':data,'received':sent,'total':total_size,'percent':min(100,int(sent*100/total_size))})
-    await manager.send_to_device(device_id,{'type':'web_file_complete','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
+        delivered=await manager.send_to_device(device_id,{'type':'web_file_chunk','transfer_id':transfer_id,'data':data,'received':sent,'total':total_size,'percent':min(100,int(sent*100/total_size))})
+        if not delivered: raise RuntimeError(f'Phone relay WebSocket disconnected after {sent} of {total_size} bytes')
+    delivered=await manager.send_to_device(device_id,{'type':'web_file_complete','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
+    if not delivered: raise RuntimeError('Phone relay WebSocket disconnected before completion')
 
 @app.post('/upload-stream')
 async def upload_stream(request:Request, source:str='app', filename:str='file', device_id:str=''):
