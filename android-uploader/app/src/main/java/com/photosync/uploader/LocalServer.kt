@@ -115,6 +115,17 @@ class LocalServer(context: Context, port: Int = 18000) {
     fun approvePairRequest(id: String): Boolean = try { delegate?.approvePairRequest(id) == true } catch (_: Throwable) { false }
     fun rejectPairRequest(id: String): Boolean = try { delegate?.rejectPairRequest(id) == true } catch (_: Throwable) { false }
 
+    fun receiveWebRelayChunk(
+        transferId: String,
+        filename: String,
+        data: ByteArray,
+        complete: Boolean
+    ): org.json.JSONObject? = try {
+        delegate?.receiveWebRelayChunk(transferId, filename, data, complete)
+    } catch (e: Throwable) {
+        throw e
+    }
+
     fun storeAppFile(
         resolver: android.content.ContentResolver,
         uri: android.net.Uri,
