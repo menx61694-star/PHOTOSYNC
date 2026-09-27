@@ -389,6 +389,19 @@ class MainActivity : AppCompatActivity() {
         handler.postDelayed(receiveRefreshRunnable, 3000)
         handler.postDelayed(pairRequestPoll, 1500)
         refreshHomeServerSummary()
+
+        // Re-establish the external PC relay connection when the Activity
+        // returns to the foreground. Previously onStop() closed the WebSocket,
+        // but onStart() did not initiate a new connection, leaving the PC
+        // dashboard with a stale paired device and 0 connected phones.
+        if (!localServer.isRunning() && backendServerUrl.isNotBlank()) {
+            val savedPin = serverPinInput.text.toString().trim()
+            if (savedPin.length == 6 && savedPin.all(Char::isDigit)) {
+                reconnectSocket(backendServerUrl)
+            } else {
+                fetchPcPairingPin(backendServerUrl, connectAfterFetch = true)
+            }
+        }
     }
 
     override fun onStop() {
