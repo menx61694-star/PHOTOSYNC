@@ -406,7 +406,7 @@ async def websocket_endpoint(websocket:WebSocket):
 async def _relay_file_to_device(device_id,file_obj,filename,total_size,content_type,transfer_id):
     if total_size<=0: raise RuntimeError('Empty file')
     await manager.send_to_device(device_id,{'type':'web_file_prepare','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
-    await file_obj.seek(0);sent=0
+    file_obj.seek(0);sent=0
     while sent<total_size:
         chunk=file_obj.read(min(256*1024,total_size-sent))
         if not chunk: raise RuntimeError('Unexpected end of uploaded file')
