@@ -409,11 +409,19 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacks(receiveRefreshRunnable)
         handler.removeCallbacks(pairRequestPoll)
         handler.removeCallbacks(reconnectRunnable)
-        connectionEnabled = false
-        socketGeneration++
-        socket?.close(1000, "App stopped")
-        socket = null
-        serverStatus.text = "● Server: Disconnected"
+
+        // Do not tear down the PC relay WebSocket just because the Activity
+        // becomes invisible. Android can call onStop() when another Activity,
+        // the file picker, or another app covers this Activity. Closing the
+        // socket here made the PC dashboard immediately lose the phone and
+        // broke PC relay transfers while PhotoSync was in the background.
+        // Keep the connection alive while the process remains alive; onStart()
+        // reconnects it if the transport was actually lost.
+        serverStatus.text = if (backendServerUrl.isNotBlank()) {
+            "● Server: Connected in background"
+        } else {
+            "● Server: Disconnected"
+        }
         super.onStop()
     }
 
@@ -738,6 +746,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
     override fun onDestroy() {
+        // Activity destruction is different from a temporary onStop(). Close
+        // this Activity's socket here so a recreated Activity never leaves an
+        // old WebSocket listener attached to a dead Activity instance.
+        socketGeneration++
+        socket?.close(1000, "Activity destroyed")
+        socket = null
         ioExecutor.shutdownNow()
         super.onDestroy()
     }
