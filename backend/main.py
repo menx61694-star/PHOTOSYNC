@@ -413,7 +413,11 @@ async def _relay_file_to_device(device_id,file_obj,filename,total_size,content_t
     if total_size<=0: raise RuntimeError('Empty file')
     delivered=await manager.send_to_device(device_id,{'type':'web_file_prepare','transfer_id':transfer_id,'filename':filename,'total':total_size,'content_type':content_type or 'application/octet-stream'})
     if not delivered: raise RuntimeError('Phone relay WebSocket is disconnected')
-    file_obj.seek(0);sent=0
+    # UploadFile.file is positioned at the beginning when /upload receives
+    # the multipart file. Do not await or call seek() here: SpooledTemporaryFile
+    # seek() is synchronous and older code used "await file_obj.seek(0)", which
+    # raises "'int' object can't be awaited" and aborts every PC->phone transfer.
+    sent=0
     while sent<total_size:
         chunk=await asyncio.to_thread(file_obj.read,min(256*1024,total_size-sent))
         if not chunk: raise RuntimeError('Unexpected end of uploaded file')
