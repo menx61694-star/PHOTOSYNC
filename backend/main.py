@@ -12,8 +12,8 @@ from qrcode.image.svg import SvgPathImage
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
-from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin, revoke_session
+from fastapi.responses import FileResponse, Response, JSONResponse
+from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin, revoke_session, valid_session, _request_session
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
