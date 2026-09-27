@@ -185,7 +185,13 @@ def append_received_to_paired_web_clients(device_id,info):
 @app.get('/')
 def root():return {'dashboard':'/dashboard/','standalone':'/dashboard/standalone.html','health':'/health','files':'/files','connections':'/connections','devices':'/devices','discovery_port':DISCOVERY_PORT}
 @app.get('/health')
-def health():return {'status':'ok'}
+def health():
+    return {
+        'status':'ok',
+        'relay_protocol':'pc-ws-relay-v4',
+        'relay_seek_fix':True,
+        'relay_delivery_check':True,
+    }
 @app.get('/connections')
 def connections():
     devices=manager.devices();return {'count':len(devices),'devices':[{'device_id':d,'ip':manager.ip_for_device(d)} for d in devices]}
