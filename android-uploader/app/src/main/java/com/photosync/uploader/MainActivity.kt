@@ -71,6 +71,9 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("photosync", MODE_PRIVATE) }
     private val ioExecutor: ExecutorService = Executors.newFixedThreadPool(4)
+    // WebSocket relay chunks must be written strictly in arrival order, but
+    // disk I/O must not block OkHttp's WebSocket reader callback.
+    private val relayExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var socketGeneration = 0L
     private val webRelayNames = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val reconnectRunnable = Runnable {
@@ -752,6 +755,7 @@ class MainActivity : AppCompatActivity() {
         socketGeneration++
         socket?.close(1000, "Activity destroyed")
         socket = null
+        relayExecutor.shutdownNow()
         ioExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -845,23 +849,54 @@ class MainActivity : AppCompatActivity() {
                             val transferId=data.optString("transfer_id","")
                             val payload=data.optString("data","")
                             if(transferId.isBlank() || payload.isBlank()) return
-                            val bytes=Base64.decode(payload,Base64.DEFAULT)
-                            localServer.receiveWebRelayChunk(transferId,webRelayNames[transferId] ?: "received_file",bytes,false)
                             val percent=data.optInt("percent",0).coerceIn(0,100)
-                            runOnUiThread { activeProgressRows[transferId]?.findViewWithTag<ProgressBar>("progress_bar")?.progress=percent }
+                            val filename=webRelayNames[transferId] ?: "received_file"
+                            // Never perform filesystem I/O directly inside OkHttp's
+                            // WebSocket reader callback. A slow write can block
+                            // frame processing and make the relay connection look
+                            // dead. A single executor preserves chunk ordering.
+                            relayExecutor.execute {
+                                try {
+                                    val bytes=Base64.decode(payload,Base64.DEFAULT)
+                                    localServer.receiveWebRelayChunk(transferId,filename,bytes,false)
+                                    runOnUiThread {
+                                        if (started) {
+                                            activeProgressRows[transferId]
+                                                ?.findViewWithTag<ProgressBar>("progress_bar")
+                                                ?.progress=percent
+                                        }
+                                    }
+                                } catch(e:Exception) {
+                                    runOnUiThread {
+                                        activeReceiveTransfers.remove(transferId)
+                                        webRelayNames.remove(transferId)
+                                        removeProgressRow(transferId)
+                                        status.text="PC relay receive failed: " + (e.message ?: "unknown error")
+                                    }
+                                }
+                            }
                         }
                         "web_file_complete" -> {
                             val transferId=data.optString("transfer_id","")
                             val filename=data.optString("filename","received_file")
-                            try {
-                                val info=localServer.receiveWebRelayChunk(transferId,filename,ByteArray(0),true)
-                                runOnUiThread {
-                                    activeReceiveTransfers.remove(transferId);webRelayNames.remove(transferId);removeProgressRow(transferId)
-                                    if(info!=null) addFile(info,receivedFilesContainer,"No files received from web yet")
-                                    status.text="Received from PC ✓ " + filename
+                            relayExecutor.execute {
+                                try {
+                                    val info=localServer.receiveWebRelayChunk(transferId,filename,ByteArray(0),true)
+                                    runOnUiThread {
+                                        activeReceiveTransfers.remove(transferId)
+                                        webRelayNames.remove(transferId)
+                                        removeProgressRow(transferId)
+                                        if(info!=null) addFile(info,receivedFilesContainer,"No files received from web yet")
+                                        status.text="Received from PC ✓ " + filename
+                                    }
+                                } catch(e:Exception) {
+                                    runOnUiThread {
+                                        activeReceiveTransfers.remove(transferId)
+                                        webRelayNames.remove(transferId)
+                                        removeProgressRow(transferId)
+                                        status.text="PC relay receive failed: " + (e.message ?: "unknown error")
+                                    }
                                 }
-                            } catch(e:Exception) {
-                                runOnUiThread { activeReceiveTransfers.remove(transferId);webRelayNames.remove(transferId);removeProgressRow(transferId);status.text="PC relay receive failed: " + (e.message ?: "unknown error") }
                             }
                         }
                         "file_uploaded" -> {
