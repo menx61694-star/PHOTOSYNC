@@ -472,12 +472,14 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
     except HTTPException as exc:
         try: destination.unlink(missing_ok=True)
         except Exception: pass
-        await manager.send_to_device(owner, {'type':'upload_failed','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'error':str(exc.detail)})
+        if source != 'app':
+            await manager.send_to_device(owner, {'type':'upload_failed','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'error':str(exc.detail)})
         raise
     except Exception as exc:
         try: destination.unlink(missing_ok=True)
         except Exception: pass
-        await manager.send_to_device(owner, {'type':'upload_failed','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'error':str(exc)})
+        if source != 'app':
+            await manager.send_to_device(owner, {'type':'upload_failed','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'error':str(exc)})
         raise HTTPException(500, f'Stream upload failed: {exc}')
 
     info = file_info(destination, source, owner)
