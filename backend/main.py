@@ -1,11 +1,9 @@
 from pathlib import Path
 from uuid import uuid4
 import asyncio
-import http.client
 import re, json, socket, threading, hashlib, secrets, io, ipaddress
 from datetime import datetime, timezone
 import time
-from urllib.parse import quote
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
 import qrcode
 from qrcode.image.svg import SvgPathImage
@@ -423,33 +421,6 @@ async def websocket_endpoint(websocket:WebSocket):
         while True:await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket);await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
-
-def _forward_file_to_phone(phone_ip,phone_cookie,filename,file_obj,total_size,content_type):
-    if not phone_ip or not phone_cookie:raise RuntimeError('Phone is not paired for file transfer')
-    if total_size <= 0:raise RuntimeError('Empty file')
-    path=f'/upload?source=web&filename={quote(filename,safe="")}'
-    conn=http.client.HTTPConnection(phone_ip,18000,timeout=max(15,min(300,15+total_size//(1024*1024))))
-    try:
-        conn.putrequest('POST',path)
-        conn.putheader('Cookie',phone_cookie)
-        conn.putheader('Content-Type',content_type or 'application/octet-stream')
-        conn.putheader('Content-Length',str(total_size))
-        conn.putheader('Cache-Control','no-store')
-        conn.endheaders()
-        file_obj.seek(0)
-        remaining=total_size
-        while remaining:
-            chunk=file_obj.read(min(4*1024*1024,remaining))
-            if not chunk:raise RuntimeError('Unexpected end of uploaded file')
-            conn.send(chunk)
-            remaining-=len(chunk)
-        response=conn.getresponse()
-        body=response.read()
-        if not 200 <= response.status < 300:raise RuntimeError(f'Phone HTTP {response.status}')
-        try:return json.loads(body.decode('utf-8'))
-        except Exception:raise RuntimeError('Phone returned invalid upload response')
-    finally:
-        conn.close()
 
 @app.post('/upload-stream')
 async def upload_stream(request:Request, source:str='app', filename:str='file', device_id:str=''):
