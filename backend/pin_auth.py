@@ -453,26 +453,44 @@ def install(app):
             attempt_key = _attempt_key(request, device_id)
             if not _record_attempt(attempt_key):
                 return JSONResponse({"detail": "Too many PIN attempts; try again later"}, status_code=429)
-            # Embedded Server and PC Server are intentionally separate.
-            # Browser pairing must never start the Embedded Server implicitly.
-            # The user must start it explicitly from the Android Server page.
-            state, phone_cookie, request_id = await asyncio.to_thread(_verify_phone_pin, phone_ips, pin)
-            if state == "pending" and request_id:
-                _pending_web_pairs[request_id] = {
-                    "device_id": device_id,
-                    "phone_ip": phone_ips[0] if phone_ips else phone_ip,
-                    "phone_ips": phone_ips,
-                    "web_client_id": web_client_id,
-                    "attempt_key": attempt_key,
-                    "created_at": time.time(),
-                }
-                return JSONResponse({"paired": False, "pending": True, "request_id": request_id, "message": "Approve the pairing request on the phone"}, status_code=202)
-            if state == "invalid":
-                return JSONResponse({"detail": "Invalid phone PIN", "code": "PHONE_PIN_INVALID", "hint": "This field requires the selected phone's Embedded Server PIN, not the PC Server PIN."}, status_code=403)
-            if state == "unreachable":
-                return JSONResponse({"detail": "Phone embedded server could not be reached"}, status_code=503)
-            if state != "approved":
-                return JSONResponse({"detail": "Phone pairing failed"}, status_code=502)
+            # PC dashboard pairing is authorized by the PC Server PIN and the
+            # selected phone's live WebSocket connection. Never call the phone's
+            # Embedded Server or ask for its separate Embedded PIN here.
+            try:
+                import main as server_main
+                manager = getattr(server_main, "manager", None)
+                if manager is None or device_id not in manager.devices():
+                    return JSONResponse({"detail": "Selected phone is not connected to this PC server"}, status_code=409)
+            except Exception:
+                return JSONResponse({"detail": "Could not verify the selected phone connection"}, status_code=503)
+            if not valid_server_pairing_pin(pin):
+                return JSONResponse({"detail": "Invalid PC Server PIN", "code": "SERVER_PIN_INVALID"}, status_code=403)
+            try:
+                import main as server_main
+                owner_ip = manager.ip_for_device(device_id)
+                owner_advertised_ip = manager.advertised_ip_for_device(device_id)
+                owner_token = secrets.token_urlsafe(32)
+                now = time.time()
+                with _lock:
+                    _sessions[owner_token] = {
+                        "expires": now + SESSION_TTL_SECONDS,
+                        "device_id": device_id,
+                        "phone_cookie": "",
+                        "phone_ip": owner_advertised_ip or owner_ip or "",
+                    }
+                meta = server_main.get_web_meta(web_client_id)
+                old_token = meta.get("server_session_token", "")
+                if old_token:
+                    revoke_session(old_token)
+                meta["paired_device_id"] = device_id
+                meta.pop("phone_session_cookie", None)
+                meta.pop("phone_ip", None)
+                meta["server_session_token"] = owner_token
+                server_main.write_json(server_main.web_meta_path(web_client_id), meta)
+                request.state.photosync_session_token = owner_token
+            except Exception:
+                revoke_session(owner_token)
+                return JSONResponse({"detail": "Could not create PC relay pairing session"}, status_code=500)
             _clear_attempts(attempt_key)
             now = time.time()
             token = secrets.token_urlsafe(32)
