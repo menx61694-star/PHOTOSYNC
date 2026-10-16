@@ -292,7 +292,6 @@ _PUBLIC_EXACT = {
     "/web-client/session",
     "/web-client/pair",
     "/web-client/pair-status",
-    "/web-client/disconnect",
     "/connections",
     "/account/signup",
     "/account/login",
