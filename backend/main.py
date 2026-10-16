@@ -505,9 +505,10 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
         original=safe_name(file.filename)
         transfer_id=uuid4().hex
         uploads,downloads=device_dirs(did)
+        # UploadFile.size can be None on some Starlette versions/streaming
+        # paths. Do not reject a valid browser upload merely because the parser
+        # did not populate that metadata; count the actual streamed bytes.
         total=int(file.size or 0)
-        if total <= 0:
-            raise HTTPException(400,'Empty file')
         destination=downloads/f'{transfer_id}__received__{did}__{original}'
         received=0
         last=-1
@@ -529,6 +530,8 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
                             'source':'web','device_id':did,'filename':original,
                             'received':received,'total':total,'percent':percent
                         })
+            if received <= 0:
+                raise HTTPException(400,'Empty file')
             if total and received != total:
                 raise HTTPException(400,'Incomplete upload')
         except Exception:
