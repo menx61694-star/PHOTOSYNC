@@ -425,18 +425,28 @@ async def websocket_endpoint(websocket:WebSocket):
     device_dirs(device_id)
     await manager.connect(websocket,device_id,advertised_ip if advertised_ok else '')
     manager.connection_ips[websocket]=host
-    await manager.send(websocket, {
-        'type':'connection_info',
-        'device_id':device_id,
-        'ip':host,
-        'advertised_ip':advertised_ip if advertised_ok else '',
-        'connections':len(manager.devices())
-    })
-    await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
     try:
-        while True:await websocket.receive_text()
+        await manager.send(websocket, {
+            'type':'connection_info',
+            'device_id':device_id,
+            'ip':host,
+            'advertised_ip':advertised_ip if advertised_ok else '',
+            'connections':len(manager.devices())
+        })
+        await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
+        while True:
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket);await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
+        pass
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("PhotoSync WebSocket handler failed for device %s", device_id)
+    finally:
+        manager.disconnect(websocket)
+        try:
+            await manager.broadcast({'type':'connections_changed','count':len(manager.devices())})
+        except Exception:
+            pass
 
 @app.post('/upload-stream')
 async def upload_stream(request:Request, source:str='app', filename:str='file', device_id:str=''):
@@ -561,10 +571,16 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
                 raise HTTPException(400,'Empty file')
             if total and received != total:
                 raise HTTPException(400,'Incomplete upload')
-        except Exception:
+        except HTTPException:
             try: destination.unlink(missing_ok=True)
             except OSError: pass
             raise
+        except Exception as exc:
+            try: destination.unlink(missing_ok=True)
+            except OSError: pass
+            import logging
+            logging.getLogger(__name__).exception("PC relay upload failed for device %s", did)
+            raise HTTPException(500, f"PC relay upload failed: {type(exc).__name__}") from exc
         info=file_info(destination,'received',did)
         info.update({'source':'received','transfer_id':transfer_id,
                      'content_type':file.content_type or 'application/octet-stream'})
