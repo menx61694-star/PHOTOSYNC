@@ -259,7 +259,7 @@ def web_client_pair(request:Request, web_client_id:str=Form(...), device_id:str=
     if not cid or not did: raise HTTPException(400,'web_client_id and device_id required')
     if did not in manager.devices(): raise HTTPException(409,'Selected phone is not connected')
     pin=(request.headers.get('X-PhotoSync-Pair-PIN','') or '').strip()
-    if not re.fullmatch(r'\\d{6}', pin): raise HTTPException(400,'Enter the 6-digit Embedded Server PIN')
+    if not re.fullmatch(r'\d{6}', pin): raise HTTPException(400,'Enter the 6-digit Embedded Server PIN')
     phone_ip=manager.ip_for_device(did)
     advertised_ip=(request.headers.get('X-PhotoSync-Device-IP','') or '').strip()
     try:
