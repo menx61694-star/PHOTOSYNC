@@ -12,8 +12,8 @@ from qrcode.image.svg import SvgPathImage
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
-from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin, revoke_session
+from fastapi.responses import FileResponse, Response, JSONResponse
+from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin, revoke_session, valid_session, _request_session
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
@@ -191,7 +191,16 @@ def devices():
     return {'devices':sorted(set(stored)|set(manager.devices()))}
 
 @app.get('/web-clients')
-def web_clients():
+def web_clients(request: Request):
+    token = _request_session(request)
+    if not token or not valid_session(token):
+        raise HTTPException(401, "PIN pairing required")
+    # Only enumerate web clients paired to the device authorized by this
+    # browser session; never expose the server-wide client inventory.
+    from pin_auth import session_device
+    owner_device_id = session_device(token)
+    if not owner_device_id:
+        raise HTTPException(401, "Pairing session is invalid")
     clients=[]
     for d in WEB_CLIENTS_DIR.iterdir() if WEB_CLIENTS_DIR.exists() else []:
         if not d.is_dir(): continue
@@ -199,6 +208,8 @@ def web_clients():
         if not cid: continue
         meta=get_web_meta(cid)
         paired=safe_device_id(meta.get('paired_device_id',''))
+        if paired != owner_device_id or not valid_session(meta.get('server_session_token',''), owner_device_id):
+            continue
         sent=read_json(web_history_path(cid,'sent'),[])
         received=read_json(web_history_path(cid,'received'),[])
         clients.append({
@@ -213,10 +224,20 @@ def web_clients():
     return {'clients': clients}
 
 @app.post('/web-client/disconnect')
-def web_client_disconnect(web_client_id:str=Form(...)):
+def web_client_disconnect(request: Request, web_client_id:str=Form(...)):
     cid=safe_device_id(web_client_id)
+    if not cid:
+        raise HTTPException(400, "Invalid web_client_id")
+    token = _request_session(request)
+    if not token or not valid_session(token):
+        raise HTTPException(401, "PIN pairing required")
     meta=get_web_meta(cid)
-    revoke_session(meta.get('server_session_token',''))
+    paired=safe_device_id(meta.get('paired_device_id',''))
+    # A browser may disconnect only its own session; never trust a submitted
+    # client ID as authorization to revoke another browser's token.
+    if not paired or meta.get('server_session_token','') != token or not valid_session(token, paired):
+        raise HTTPException(403, "This session cannot disconnect that web client")
+    revoke_session(token)
     meta['paired_device_id']=None
     meta.pop('phone_session_cookie',None)
     meta.pop('phone_ip',None)
