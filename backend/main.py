@@ -109,6 +109,7 @@ class ConnectionManager:
         self.connections={}
         self.connection_ips={}
         self.connection_advertised_ips={}
+        self._send_locks={}
         self._lock=threading.RLock()
     async def connect(self,ws,device_id,advertised_ip=''):
         await ws.accept()
@@ -116,11 +117,13 @@ class ConnectionManager:
             self.connections[ws]=device_id
             self.connection_ips[ws]=ws.client.host if ws.client else 'unknown'
             self.connection_advertised_ips[ws]=advertised_ip or ''
+            self._send_locks[ws]=asyncio.Lock()
     def disconnect(self,ws):
         with self._lock:
             self.connections.pop(ws,None)
             self.connection_ips.pop(ws,None)
             self.connection_advertised_ips.pop(ws,None)
+            self._send_locks.pop(ws,None)
     def devices(self):
         with self._lock:return sorted(set(self.connections.values()))
     def ip_for_device(self,device_id):
@@ -133,6 +136,19 @@ class ConnectionManager:
             for ws,did in list(self.connections.items()):
                 if did==device_id:return self.connection_advertised_ips.get(ws,'')
         return ''
+    async def send(self,ws,message):
+        # A browser upload can emit progress while a connection-change event is
+        # being broadcast. Serialize writes per socket: concurrent ASGI
+        # websocket.send calls can fail and incorrectly remove a live phone.
+        with self._lock:
+            lock=self._send_locks.get(ws)
+        if lock is None:
+            raise RuntimeError('WebSocket is no longer connected')
+        async with lock:
+            with self._lock:
+                if ws not in self.connections:
+                    raise RuntimeError('WebSocket is no longer connected')
+            await ws.send_json(message)
     async def disconnect_all(self, code=1008, reason='Server pairing PIN refreshed'):
         with self._lock:
             sockets=list(self.connections.keys())
@@ -152,7 +168,7 @@ class ConnectionManager:
             targets=[ws for ws,did in self.connections.items() if did==device_id]
         dead=[]
         for ws in targets:
-            try:await ws.send_json(message)
+            try:await self.send(ws,message)
             except Exception:dead.append(ws)
         for ws in dead:self.disconnect(ws)
     async def broadcast(self,message):
@@ -160,7 +176,7 @@ class ConnectionManager:
             targets=list(self.connections)
         dead=[]
         for ws in targets:
-            try:await ws.send_json(message)
+            try:await self.send(ws,message)
             except Exception:dead.append(ws)
         for ws in dead:self.disconnect(ws)
 manager=ConnectionManager()
@@ -409,7 +425,7 @@ async def websocket_endpoint(websocket:WebSocket):
     device_dirs(device_id)
     await manager.connect(websocket,device_id,advertised_ip if advertised_ok else '')
     manager.connection_ips[websocket]=host
-    await websocket.send_json({
+    await manager.send(websocket, {
         'type':'connection_info',
         'device_id':device_id,
         'ip':host,
@@ -552,14 +568,21 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
         info=file_info(destination,'received',did)
         info.update({'source':'received','transfer_id':transfer_id,
                      'content_type':file.content_type or 'application/octet-stream'})
-        await manager.send_to_device(did,{'type':'file_uploaded',**info})
-        # Keep the browser's sent history separate from the phone's received
-        # file list while serving the same stored file through the PC relay.
+        # Persist browser history before notifying the phone, so a history
+        # write failure cannot leave a delivered file reported as "Upload failed".
         entry=dict(info)
         entry['source']='web'
         entry['url']=f'/web-client/file/{cid}/{did}/web/{destination.name}'
         entry['device_id']=did
-        add_web_history(cid,'sent',entry)
+        try:
+            add_web_history(cid,'sent',entry)
+        except Exception as exc:
+            try: destination.unlink(missing_ok=True)
+            except OSError: pass
+            import logging
+            logging.getLogger(__name__).exception("Could not persist web upload history")
+            raise HTTPException(500, f"Could not save transfer history: {type(exc).__name__}") from exc
+        await manager.send_to_device(did,{'type':'file_uploaded',**info})
         return entry
     owner=request_owner_id(request,device_id)
     uploads,downloads=device_dirs(owner)
@@ -593,7 +616,13 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
     info['content_type']=file.content_type or 'application/octet-stream'
     info['transfer_id']=transfer_id
     await manager.send_to_device(owner,{'type':'file_uploaded',**info})
-    append_received_to_paired_web_clients(owner,info)
+    # File persistence is the primary transfer. A secondary browser-history
+    # write must not turn a completed phone upload into an HTTP 500 response.
+    try:
+        append_received_to_paired_web_clients(owner,info)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Could not update paired web-client history for transfer %s", transfer_id)
     return info
 def _account_session_cookie(response, token):
     response.set_cookie(
