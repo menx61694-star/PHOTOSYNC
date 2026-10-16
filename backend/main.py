@@ -483,16 +483,25 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
                         # the upload and cause the live device entry to be
                         # dropped on a transient socket-send failure.
                         if source != 'app':
-                            await manager.send_to_device(owner, {
-                                'type':'upload_progress',
-                                'transfer_id':transfer_id,
-                                'source':source,
-                                'device_id':owner,
-                                'filename':original,
-                                'received':received,
-                                'total':total,
-                                'percent':percent
-                            })
+                            try:
+                                await manager.send_to_device(owner, {
+                                    'type':'upload_progress',
+                                    'transfer_id':transfer_id,
+                                    'source':source,
+                                    'device_id':owner,
+                                    'filename':original,
+                                    'received':received,
+                                    'total':total,
+                                    'percent':percent
+                                })
+                            except Exception:
+                                # Progress notifications are best-effort; a transient
+                                # websocket failure must not invalidate the HTTP transfer.
+                                import logging
+                                logging.getLogger(__name__).warning(
+                                    "Could not send upload progress to device %s", owner,
+                                    exc_info=True
+                                )
             if total > 0 and received != total:
                 raise HTTPException(400, 'Incomplete upload')
     except HTTPException as exc:
@@ -515,11 +524,26 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
     # its sent list locally. Avoid echoing the completion event back over the
     # same WebSocket; browser history is updated independently below.
     if source != 'app':
-        await manager.send_to_device(owner, {
-            'type':'file_uploaded',
-            **info
-        })
-    append_received_to_paired_web_clients(owner, info)
+        try:
+            await manager.send_to_device(owner, {
+                'type':'file_uploaded',
+                **info
+            })
+        except Exception:
+            # The file is already stored; websocket notification failure must not
+            # turn a successful transfer into an HTTP 500.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Upload completed but completion event failed for device %s", owner,
+                exc_info=True
+            )
+    try:
+        append_received_to_paired_web_clients(owner, info)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "Upload completed but paired web-client history update failed for device %s", owner
+        )
     return info
 
 @app.post('/upload')
@@ -562,11 +586,20 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
                     percent=min(100,int(received*100/total)) if total else 0
                     if percent != last:
                         last=percent
-                        await manager.send_to_device(did,{
-                            'type':'upload_progress','transfer_id':transfer_id,
-                            'source':'web','device_id':did,'filename':original,
-                            'received':received,'total':total,'percent':percent
-                        })
+                        try:
+                            await manager.send_to_device(did,{
+                                'type':'upload_progress','transfer_id':transfer_id,
+                                'source':'web','device_id':did,'filename':original,
+                                'received':received,'total':total,'percent':percent
+                            })
+                        except Exception:
+                            # The HTTP upload owns the transfer; websocket progress is
+                            # only a UI hint and must not abort a valid file upload.
+                            import logging
+                            logging.getLogger(__name__).warning(
+                                "Could not send PC relay upload progress to device %s", did,
+                                exc_info=True
+                            )
             if received <= 0:
                 raise HTTPException(400,'Empty file')
             if total and received != total:
@@ -598,7 +631,16 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
             import logging
             logging.getLogger(__name__).exception("Could not persist web upload history")
             raise HTTPException(500, f"Could not save transfer history: {type(exc).__name__}") from exc
-        await manager.send_to_device(did,{'type':'file_uploaded',**info})
+        try:
+            await manager.send_to_device(did,{'type':'file_uploaded',**info})
+        except Exception:
+            # The file and history are committed already. Report HTTP success rather
+            # than falsely showing "Upload failed" because a websocket event raced.
+            import logging
+            logging.getLogger(__name__).warning(
+                "PC relay upload completed but notification failed for device %s", did,
+                exc_info=True
+            )
         return entry
     owner=request_owner_id(request,device_id)
     uploads,downloads=device_dirs(owner)
