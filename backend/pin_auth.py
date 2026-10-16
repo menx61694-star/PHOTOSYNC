@@ -492,16 +492,8 @@ def install(app):
                 revoke_session(owner_token)
                 return JSONResponse({"detail": "Could not create PC relay pairing session"}, status_code=500)
             _clear_attempts(attempt_key)
-            now = time.time()
-            token = secrets.token_urlsafe(32)
-            with _lock:
-                _sessions[token] = {
-                    "expires": now + SESSION_TTL_SECONDS,
-                    "device_id": device_id,
-                    "phone_cookie": phone_cookie or "",
-                    "phone_ip": phone_ip,
-                }
-            request.state.photosync_phone_cookie = phone_cookie or ""
+            token = owner_token
+            request.state.photosync_phone_cookie = ""
             request.state.photosync_session_token = token
             response = await call_next(request)
             if response.status_code < 400:
