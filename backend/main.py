@@ -2,7 +2,7 @@ from pathlib import Path
 from uuid import uuid4
 import asyncio
 import http.client
-import re, json, socket, threading, hashlib, secrets, io, ipaddress
+import re, json, socket, threading, hashlib, secrets, io, ipaddress, time
 from datetime import datetime, timezone
 from urllib.parse import quote
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
@@ -11,7 +11,7 @@ from qrcode.image.svg import SvgPathImage
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
 from pin_auth import install as install_pin_auth, session_phone_cookie, server_pairing_pin, valid_server_pairing_pin, refresh_server_pairing_pin, revoke_session
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -493,27 +493,17 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
         cookie=meta.get('phone_session_cookie','')
         if not cookie: raise HTTPException(403,'Phone must be paired again before sending files')
         original=safe_name(file.filename); transfer_id=uuid4().hex
-        total_size=int(file.size or 0)
-        if total_size <= 0:
-            # Some Starlette versions omit UploadFile.size; spool to a temporary
-            # file so the phone transfer always receives an exact Content-Length.
-            temp_path=UPLOAD_DIR/f'.relay-{transfer_id}.tmp'
-            try:
-                with temp_path.open('wb') as output:
-                    while True:
-                        chunk=await file.read(1024*1024)
-                        if not chunk: break
-                        output.write(chunk); total_size+=len(chunk)
-                if total_size <= 0: raise HTTPException(400,'Empty file')
-                with temp_path.open('rb') as relay_file:
-                    phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,relay_file,total_size,file.content_type or 'application/octet-stream')
-            finally:
-                temp_path.unlink(missing_ok=True)
-        else:
-            try:
-                phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,file.file,total_size,file.content_type or 'application/octet-stream')
-            except Exception as exc:
-                raise HTTPException(502,f'Phone transfer failed: {exc}')
+        try:
+            # SpooledTemporaryFile supports seeking even when Starlette omits size.
+            file.file.seek(0,2)
+            total_size=file.file.tell()
+            file.file.seek(0)
+            if total_size <= 0: raise HTTPException(400,'Empty file')
+            phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,file.file,total_size,file.content_type or 'application/octet-stream')
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(502,f'Phone transfer failed: {exc}')
         phone_info['device_id']=did
         phone_info['source']='received'
         phone_info['transfer_id']=transfer_id
