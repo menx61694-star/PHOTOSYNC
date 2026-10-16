@@ -229,19 +229,92 @@ def web_client_session():
 @app.get('/web-client/state')
 def web_client_state(web_client_id:str):
     meta=get_web_meta(web_client_id);paired=safe_device_id(meta.get('paired_device_id',''));return {'web_client_id':safe_device_id(web_client_id),'paired_device_id':paired or None,'sent':read_json(web_history_path(web_client_id,'sent'),[]),'received':read_json(web_history_path(web_client_id,'received'),[])}
+# Browser pairing requests are relayed to the phone's embedded HTTP server.
+# Keep pending request metadata until the phone approves and returns its session cookie.
+_pending_phone_pairs = {}
+_pending_phone_pairs_lock = threading.Lock()
+
+def _phone_http(phone_ip, method, path, pin_cookie=''):
+    if not phone_ip:
+        raise HTTPException(400, 'Phone IP is unavailable; select the phone again')
+    conn = http.client.HTTPConnection(phone_ip, 18000, timeout=8)
+    try:
+        headers = {'Cache-Control': 'no-store'}
+        if pin_cookie:
+            headers['Cookie'] = pin_cookie
+        conn.request(method, path, headers=headers)
+        response = conn.getresponse()
+        body = response.read()
+        try:
+            data = json.loads(body.decode('utf-8')) if body else {}
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            data = {}
+        return response.status, data, response.getheader('Set-Cookie', '')
+    finally:
+        conn.close()
+
 @app.post('/web-client/pair')
-def web_client_pair(web_client_id:str=Form(...),device_id:str=Form(...)):
-    cid=safe_device_id(web_client_id);did=safe_device_id(device_id)
-    if not cid or not did:raise HTTPException(400,'web_client_id and device_id required')
-    if did not in manager.devices():raise HTTPException(409,'Selected phone is not connected')
-    # Pair the browser to the PC relay session. Transfers are handled by this
-    # server, so they must not depend on a phone-issued embedded-server cookie.
+def web_client_pair(request:Request, web_client_id:str=Form(...), device_id:str=Form(...)):
+    cid=safe_device_id(web_client_id); did=safe_device_id(device_id)
+    if not cid or not did: raise HTTPException(400,'web_client_id and device_id required')
+    if did not in manager.devices(): raise HTTPException(409,'Selected phone is not connected')
+    pin=(request.headers.get('X-PhotoSync-Pair-PIN','') or '').strip()
+    if not re.fullmatch(r'\\d{6}', pin): raise HTTPException(400,'Enter the 6-digit Embedded Server PIN')
+    phone_ip=manager.ip_for_device(did)
+    advertised_ip=(request.headers.get('X-PhotoSync-Device-IP','') or '').strip()
+    try:
+        if advertised_ip and ipaddress.ip_address(advertised_ip).is_private:
+            # Prefer the websocket peer IP, which is the address the PC can reach.
+            if not phone_ip or phone_ip == 'unknown': phone_ip=advertised_ip
+    except ValueError:
+        pass
+    try:
+        status,data,_=_phone_http(phone_ip,'POST',f'/api/pair?pin={quote(pin,safe="")}')
+    except (OSError, TimeoutError, http.client.HTTPException) as exc:
+        raise HTTPException(502,f'Unable to reach phone Embedded Server: {exc}')
+    if status == 202 and data.get('request_id'):
+        request_id=str(data['request_id'])
+        with _pending_phone_pairs_lock:
+            _pending_phone_pairs[request_id]={'web_client_id':cid,'device_id':did,'phone_ip':phone_ip,'created_at':time.time()}
+        return JSONResponse({'request_id':request_id,'pending':True,'message':data.get('message','Pairing request sent to phone')},status_code=202)
+    if status != 200 or not data.get('paired'):
+        raise HTTPException(status if 400 <= status < 500 else 502,data.get('message') or data.get('detail') or 'Phone pairing failed')
+    raise HTTPException(502,'Phone did not return a pairing approval session')
+
+@app.get('/web-client/pair-status')
+def web_client_pair_status(request_id:str, web_client_id:str, device_id:str):
+    cid=safe_device_id(web_client_id); did=safe_device_id(device_id)
+    with _pending_phone_pairs_lock:
+        pending=_pending_phone_pairs.get(request_id)
+    if not pending or pending.get('web_client_id')!=cid or pending.get('device_id')!=did:
+        raise HTTPException(404,'Pairing request not found; try pairing again')
+    if time.time()-pending.get('created_at',0)>120:
+        with _pending_phone_pairs_lock: _pending_phone_pairs.pop(request_id,None)
+        raise HTTPException(408,'Pairing request timed out')
+    phone_ip=pending['phone_ip']
+    try:
+        status,data,set_cookie=_phone_http(phone_ip,'GET',f'/api/pair/status?id={quote(request_id,safe="")}')
+    except (OSError, TimeoutError, http.client.HTTPException) as exc:
+        raise HTTPException(502,f'Unable to check phone pairing: {exc}')
+    if status == 202 or data.get('pending'):
+        return JSONResponse({'pending':True,'message':data.get('message','Pairing request pending')},status_code=202)
+    if status != 200 or not data.get('paired'):
+        with _pending_phone_pairs_lock: _pending_phone_pairs.pop(request_id,None)
+        raise HTTPException(status if 400 <= status < 500 else 502,data.get('message') or 'Phone pairing was rejected')
+    cookie=(set_cookie or '').split(';',1)[0].strip()
+    if not cookie or '=' not in cookie:
+        with _pending_phone_pairs_lock: _pending_phone_pairs.pop(request_id,None)
+        raise HTTPException(502,'Phone approved pairing but did not return its session cookie')
     meta=get_web_meta(cid)
+    old_token=meta.get('server_session_token','')
+    if old_token: revoke_session(old_token)
     meta['paired_device_id']=did
-    meta.pop('phone_session_cookie',None)
-    meta['phone_ip']=manager.ip_for_device(did)
+    meta['phone_session_cookie']=cookie
+    meta['phone_ip']=phone_ip
     write_json(web_meta_path(cid),meta)
-    return {'ok':True,'web_client_id':cid,'paired_device_id':did}
+    with _pending_phone_pairs_lock: _pending_phone_pairs.pop(request_id,None)
+    return {'ok':True,'paired':True,'web_client_id':cid,'paired_device_id':did}
+
 @app.post('/web-client/unpair')
 def web_client_unpair(web_client_id:str=Form(...)):
     cid=safe_device_id(web_client_id)
@@ -410,100 +483,57 @@ async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form(
     source=source if source in {'web','app','unknown'} else 'unknown'
     if source=='web':
         cid=safe_device_id(web_client_id)
-        if not cid:
-            raise HTTPException(400,'web_client_id required')
+        if not cid: raise HTTPException(400,'web_client_id required')
         meta=get_web_meta(cid)
-        paired_device=safe_device_id(meta.get('paired_device_id',''))
-        requested_device=safe_device_id(target_device_id)
-        if not paired_device or (requested_device and requested_device != paired_device):
+        did=safe_device_id(target_device_id) or safe_device_id(meta.get('paired_device_id',''))
+        if not did or did != safe_device_id(meta.get('paired_device_id','')):
             raise HTTPException(403,'Web client is not paired with the selected phone')
-        did=requested_device or paired_device
-        if did not in manager.devices():
-            raise HTTPException(409,f'Phone {did} is not connected')
-        # PC Relay owns the transfer. Do not depend on the phone's independent
-        # Embedded Server, its PIN, HTTP port 18000, or an embedded session cookie.
-        original=safe_name(file.filename)
-        transfer_id=uuid4().hex
-        uploads,downloads=device_dirs(did)
-        # UploadFile.size can be None on some Starlette versions/streaming
-        # paths. Do not reject a valid browser upload merely because the parser
-        # did not populate that metadata; count the actual streamed bytes.
-        total=int(file.size or 0)
-        destination=downloads/f'{transfer_id}__received__{did}__{original}'
-        received=0
-        last=-1
-        try:
-            with destination.open('wb') as output:
-                while True:
-                    chunk=await file.read(1024*1024)
-                    if not chunk:
-                        break
-                    await asyncio.to_thread(output.write,chunk)
-                    received+=len(chunk)
-                    if total and received>total:
-                        raise HTTPException(400,'Request body is larger than declared file size')
-                    percent=min(100,int(received*100/total)) if total else 0
-                    if percent != last:
-                        last=percent
-                        await manager.send_to_device(did,{
-                            'type':'upload_progress','transfer_id':transfer_id,
-                            'source':'web','device_id':did,'filename':original,
-                            'received':received,'total':total,'percent':percent
-                        })
-            if received <= 0:
-                raise HTTPException(400,'Empty file')
-            if total and received != total:
-                raise HTTPException(400,'Incomplete upload')
-        except Exception:
-            try: destination.unlink(missing_ok=True)
-            except OSError: pass
-            raise
-        info=file_info(destination,'received',did)
-        info.update({'source':'received','transfer_id':transfer_id,
-                     'content_type':file.content_type or 'application/octet-stream'})
-        await manager.send_to_device(did,{'type':'file_uploaded',**info})
-        # Keep the browser's sent history separate from the phone's received
-        # file list while serving the same stored file through the PC relay.
-        entry=dict(info)
-        entry['source']='web'
-        entry['url']=f'/web-client/file/{cid}/{did}/web/{destination.name}'
-        entry['device_id']=did
+        if did not in manager.devices(): raise HTTPException(409,f'Phone {did} is not connected')
+        phone_ip=meta.get('phone_ip') or manager.ip_for_device(did)
+        cookie=meta.get('phone_session_cookie','')
+        if not cookie: raise HTTPException(403,'Phone must be paired again before sending files')
+        original=safe_name(file.filename); transfer_id=uuid4().hex
+        total_size=int(file.size or 0)
+        if total_size <= 0:
+            # Some Starlette versions omit UploadFile.size; spool to a temporary
+            # file so the phone transfer always receives an exact Content-Length.
+            temp_path=UPLOAD_DIR/f'.relay-{transfer_id}.tmp'
+            try:
+                with temp_path.open('wb') as output:
+                    while True:
+                        chunk=await file.read(1024*1024)
+                        if not chunk: break
+                        output.write(chunk); total_size+=len(chunk)
+                if total_size <= 0: raise HTTPException(400,'Empty file')
+                with temp_path.open('rb') as relay_file:
+                    phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,relay_file,total_size,file.content_type or 'application/octet-stream')
+            finally:
+                temp_path.unlink(missing_ok=True)
+        else:
+            try:
+                phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,file.file,total_size,file.content_type or 'application/octet-stream')
+            except Exception as exc:
+                raise HTTPException(502,f'Phone transfer failed: {exc}')
+        phone_info['device_id']=did
+        phone_info['source']='received'
+        phone_info['transfer_id']=transfer_id
+        phone_info['content_type']=file.content_type or 'application/octet-stream'
+        phone_info['url']=f'http://{phone_ip}:18000{phone_info.get("url","")}'
+        await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':total_size,'total':total_size,'percent':100})
+        await manager.send_to_device(did,{'type':'file_uploaded',**phone_info})
+        entry=dict(phone_info); entry['source']='web'; entry['url']=f'/web-client/file/{cid}/{did}/received/{phone_info.get("stored_filename","")}'
         add_web_history(cid,'sent',entry)
         return entry
-    owner=request_owner_id(request,device_id)
-    uploads,downloads=device_dirs(owner)
-    stored_source='app' if source=='app' else 'received'
-    folder=uploads if stored_source=='app' else downloads
-    original=safe_name(file.filename)
-    transfer_id=uuid4().hex
-    total=int(file.size or 0)
-    received=0
-    last=-1
-    destination=folder/f'{transfer_id}__{stored_source}__{owner}__{original}'
-    try:
-        with destination.open('wb') as output:
-            while True:
-                chunk=await file.read(4*1024*1024)
-                if not chunk: break
-                await asyncio.to_thread(output.write,chunk)
-                received+=len(chunk)
-                if total>0:
-                    percent=min(100,int(received*100/total))
-                    if percent!=last:
-                        last=percent
-                        await manager.send_to_device(owner,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'received':received,'total':total,'percent':percent})
-        if total>0 and received!=total:
-            raise HTTPException(400,'Incomplete upload')
-    except Exception:
-        try: destination.unlink(missing_ok=True)
-        except OSError: pass
-        raise
-    info=file_info(destination,stored_source,owner)
-    info['content_type']=file.content_type or 'application/octet-stream'
-    info['transfer_id']=transfer_id
-    await manager.send_to_device(owner,{'type':'file_uploaded',**info})
-    append_received_to_paired_web_clients(owner,info)
-    return info
+    owner=request_owner_id(request,device_id);folder,_=device_dirs(owner);original=safe_name(file.filename);transfer_id=uuid4().hex;total=int(file.size or 0);received=0;last=-1;destination=folder/f'{transfer_id}__{source}__{owner}__{original}'
+    with destination.open('wb') as output:
+        while chunk:=await file.read(4*1024*1024):
+            output.write(chunk);received+=len(chunk)
+            if total>0:
+                percent=int(received*100/total)
+                if percent!=last:
+                    last=percent
+                    await manager.send_to_device(owner,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'received':received,'total':total,'percent':min(100,percent)})
+    info=file_info(destination,'app' if source=='app' else 'received',owner);info['content_type']=file.content_type or 'application/octet-stream';info['transfer_id']=transfer_id;await manager.send_to_device(owner,{'type':'file_uploaded',**info});append_received_to_paired_web_clients(owner,info);return info
 
 @app.post('/account/signup')
 def account_signup(name:str=Form(...),mobile:str=Form(...),username:str=Form(...),email:str=Form(...),password:str=Form(...)):
