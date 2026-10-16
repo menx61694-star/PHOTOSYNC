@@ -314,15 +314,22 @@ def web_client_pair(request:Request,web_client_id:str=Form(...),device_id:str=Fo
     cid=safe_device_id(web_client_id);did=safe_device_id(device_id)
     if not cid or not did:raise HTTPException(400,'web_client_id and device_id required')
     if did not in manager.devices():raise HTTPException(409,'Selected phone is not connected')
-    phone_cookie=getattr(request.state,'photosync_phone_cookie','') or ''
-    if not phone_cookie:raise HTTPException(502,'Phone pairing succeeded but its session cookie was not returned')
+    # PC relay pairing authenticates this browser with the PC server's own
+    # session. It must not depend on a cookie issued by the phone's embedded
+    # HTTP server; that is a separate pairing flow.
+    token=getattr(request.state,'photosync_session_token','') or ''
+    if not token or not valid_session(token, did):
+        raise HTTPException(401,'PC server pairing session was not created')
     meta=get_web_meta(cid)
     old_token=meta.get('server_session_token','')
-    if old_token: revoke_session(old_token)
+    # pin_gate creates and persists this same token before the endpoint runs.
+    # Revoking it here would make the Set-Cookie token invalid immediately.
+    if old_token and old_token != token:
+        revoke_session(old_token)
     meta['paired_device_id']=did
-    meta['phone_session_cookie']=phone_cookie
+    meta.pop('phone_session_cookie',None)
     meta['phone_ip']=manager.ip_for_device(did)
-    meta['server_session_token']=getattr(request.state,'photosync_session_token','')
+    meta['server_session_token']=token
     write_json(web_meta_path(cid),meta)
     return {'ok':True,'web_client_id':cid,'paired_device_id':did}
 @app.post('/web-client/unpair')
