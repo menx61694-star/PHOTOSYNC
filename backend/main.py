@@ -518,43 +518,98 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
 async def upload_file(request:Request,file:UploadFile=File(...),source:str=Form('unknown'),device_id:str=Form(''),target_device_id:str=Form(''),web_client_id:str=Form('')):
     source=source if source in {'web','app','unknown'} else 'unknown'
     if source=='web':
-        cid=safe_device_id(web_client_id);meta=get_web_meta(cid)
-        paired_device = safe_device_id(meta.get('paired_device_id',''))
-        requested_device = safe_device_id(target_device_id)
-        if requested_device and requested_device != paired_device:
+        cid=safe_device_id(web_client_id)
+        if not cid:
+            raise HTTPException(400,'web_client_id required')
+        meta=get_web_meta(cid)
+        paired_device=safe_device_id(meta.get('paired_device_id',''))
+        requested_device=safe_device_id(target_device_id)
+        if not paired_device or (requested_device and requested_device != paired_device):
             raise HTTPException(403,'Web client is not paired with the selected phone')
-        targets=[requested_device or paired_device] if (requested_device or paired_device) else []
-        if not targets:raise HTTPException(400,'Pair a phone before sending files')
-        original=safe_name(file.filename);transfer_id=uuid4().hex;total_size=int(file.size or 0);results=[]
-        if total_size <= 0:raise HTTPException(400,'Empty file')
-        for did in targets:
-            if did not in manager.devices():raise HTTPException(409,f'Phone {did} is not connected')
-            phone_ip=manager.ip_for_device(did)
-            cookie=meta.get('phone_session_cookie','') if did==safe_device_id(meta.get('paired_device_id','')) else ''
-            if not cookie:raise HTTPException(403,'Phone must be paired again before sending files')
-            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':0,'total':total_size,'percent':0})
-            try:
-                await file.seek(0)
-                phone_info=await asyncio.to_thread(_forward_file_to_phone,phone_ip,cookie,original,file.file,total_size,file.content_type or 'application/octet-stream')
-            except Exception as exc:
-                raise HTTPException(502,f'Phone transfer failed: {exc}')
-            phone_info['device_id']=did;phone_info['source']='received';phone_info['transfer_id']=transfer_id;phone_info['content_type']=file.content_type or 'application/octet-stream';phone_info['url']=f'http://{phone_ip}:18000{phone_info.get("url","")}'
-            await manager.send_to_device(did,{'type':'upload_progress','transfer_id':transfer_id,'source':'web','device_id':did,'filename':original,'received':total_size,'total':total_size,'percent':100})
-            await manager.send_to_device(did,{'type':'file_uploaded',**phone_info})
-            results.append(phone_info)
-        entry=dict(results[0]);entry['targets']=[r['device_id'] for r in results];entry['source']='web';add_web_history(cid,'sent',entry);return entry
+        did=requested_device or paired_device
+        if did not in manager.devices():
+            raise HTTPException(409,f'Phone {did} is not connected')
+        # PC Relay owns the transfer. Do not depend on the phone's independent
+        # Embedded Server, its PIN, HTTP port 18000, or an embedded session cookie.
+        original=safe_name(file.filename)
+        transfer_id=uuid4().hex
+        uploads,downloads=device_dirs(did)
+        total=int(file.size or 0)
+        if total <= 0:
+            raise HTTPException(400,'Empty file')
+        destination=downloads/f'{transfer_id}__received__{did}__{original}'
+        received=0
+        last=-1
+        try:
+            with destination.open('wb') as output:
+                while True:
+                    chunk=await file.read(1024*1024)
+                    if not chunk:
+                        break
+                    await asyncio.to_thread(output.write,chunk)
+                    received+=len(chunk)
+                    if total and received>total:
+                        raise HTTPException(400,'Request body is larger than declared file size')
+                    percent=min(100,int(received*100/total)) if total else 0
+                    if percent != last:
+                        last=percent
+                        await manager.send_to_device(did,{
+                            'type':'upload_progress','transfer_id':transfer_id,
+                            'source':'web','device_id':did,'filename':original,
+                            'received':received,'total':total,'percent':percent
+                        })
+            if total and received != total:
+                raise HTTPException(400,'Incomplete upload')
+        except Exception:
+            try: destination.unlink(missing_ok=True)
+            except OSError: pass
+            raise
+        info=file_info(destination,'received',did)
+        info.update({'source':'received','transfer_id':transfer_id,
+                     'content_type':file.content_type or 'application/octet-stream'})
+        await manager.send_to_device(did,{'type':'file_uploaded',**info})
+        # Keep the browser's sent history separate from the phone's received
+        # file list while serving the same stored file through the PC relay.
+        entry=dict(info)
+        entry['source']='web'
+        entry['url']=f'/web-client/file/{cid}/{did}/web/{destination.name}'
+        entry['device_id']=did
+        add_web_history(cid,'sent',entry)
+        return entry
     owner=request_owner_id(request,device_id)
-    uploads, downloads = device_dirs(owner)
-    stored_source = 'app' if source == 'app' else 'received'
-    folder = uploads if stored_source == 'app' else downloads
-    original=safe_name(file.filename);transfer_id=uuid4().hex;total=int(file.size or 0);received=0;last=-1;destination=folder/f'{transfer_id}__{stored_source}__{owner}__{original}'
-    with destination.open('wb') as output:
-        while chunk:=await file.read(4*1024*1024):
-            await asyncio.to_thread(output.write, chunk);received+=len(chunk)
-            if total>0:
-                percent=int(received*100/total)
-                if percent!=last:last=percent;await manager.send_to_device(owner,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'received':received,'total':total,'percent':min(100,percent)})
-    info=file_info(destination,stored_source,owner);info['content_type']=file.content_type or 'application/octet-stream';info['transfer_id']=transfer_id;await manager.send_to_device(owner,{'type':'file_uploaded',**info});append_received_to_paired_web_clients(owner,info);return info
+    uploads,downloads=device_dirs(owner)
+    stored_source='app' if source=='app' else 'received'
+    folder=uploads if stored_source=='app' else downloads
+    original=safe_name(file.filename)
+    transfer_id=uuid4().hex
+    total=int(file.size or 0)
+    received=0
+    last=-1
+    destination=folder/f'{transfer_id}__{stored_source}__{owner}__{original}'
+    try:
+        with destination.open('wb') as output:
+            while True:
+                chunk=await file.read(4*1024*1024)
+                if not chunk: break
+                await asyncio.to_thread(output.write,chunk)
+                received+=len(chunk)
+                if total>0:
+                    percent=min(100,int(received*100/total))
+                    if percent!=last:
+                        last=percent
+                        await manager.send_to_device(owner,{'type':'upload_progress','transfer_id':transfer_id,'source':source,'device_id':owner,'filename':original,'received':received,'total':total,'percent':percent})
+        if total>0 and received!=total:
+            raise HTTPException(400,'Incomplete upload')
+    except Exception:
+        try: destination.unlink(missing_ok=True)
+        except OSError: pass
+        raise
+    info=file_info(destination,stored_source,owner)
+    info['content_type']=file.content_type or 'application/octet-stream'
+    info['transfer_id']=transfer_id
+    await manager.send_to_device(owner,{'type':'file_uploaded',**info})
+    append_received_to_paired_web_clients(owner,info)
+    return info
 def _account_session_cookie(response, token):
     response.set_cookie(
         key='photosync_account_session',
