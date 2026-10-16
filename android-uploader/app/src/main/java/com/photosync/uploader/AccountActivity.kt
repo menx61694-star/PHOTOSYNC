@@ -65,6 +65,7 @@ class AccountActivity : AppCompatActivity() {
         root.addView(password)
 
         action = primaryButton("Create Account")
+        action.setOnClickListener { submit() }
         root.addView(action)
 
         modeToggle = secondaryButton("Already have an account? Log in")
