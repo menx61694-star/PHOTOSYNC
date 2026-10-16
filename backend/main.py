@@ -452,16 +452,21 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
                     percent = min(100, int(received * 100 / total))
                     if percent != last:
                         last = percent
-                        await manager.send_to_device(owner, {
-                            'type':'upload_progress',
-                            'transfer_id':transfer_id,
-                            'source':source,
-                            'device_id':owner,
-                            'filename':original,
-                            'received':received,
-                            'total':total,
-                            'percent':percent
-                        })
+                        # App uploads already report progress locally. Sending
+                        # progress back over the same phone WebSocket can race
+                        # the upload and cause the live device entry to be
+                        # dropped on a transient socket-send failure.
+                        if source != 'app':
+                            await manager.send_to_device(owner, {
+                                'type':'upload_progress',
+                                'transfer_id':transfer_id,
+                                'source':source,
+                                'device_id':owner,
+                                'filename':original,
+                                'received':received,
+                                'total':total,
+                                'percent':percent
+                            })
             if total > 0 and received != total:
                 raise HTTPException(400, 'Incomplete upload')
     except HTTPException as exc:
@@ -478,10 +483,14 @@ async def upload_stream(request:Request, source:str='app', filename:str='file', 
     info = file_info(destination, source, owner)
     info['content_type'] = request.headers.get('content-type','application/octet-stream')
     info['transfer_id'] = transfer_id
-    await manager.send_to_device(owner, {
-        'type':'file_uploaded',
-        **info
-    })
+    # The Android app initiated source='app' uploads and already updates
+    # its sent list locally. Avoid echoing the completion event back over the
+    # same WebSocket; browser history is updated independently below.
+    if source != 'app':
+        await manager.send_to_device(owner, {
+            'type':'file_uploaded',
+            **info
+        })
     append_received_to_paired_web_clients(owner, info)
     return info
 
