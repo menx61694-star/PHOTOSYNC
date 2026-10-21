@@ -164,21 +164,35 @@ class ConnectionManager:
             except Exception:
                 pass
     async def send_to_device(self,device_id,message):
+        # A failed notification write is not proof that a phone disconnected.
+        # The websocket endpoint's receive loop owns connection lifetime and
+        # removes sockets only after its receive loop actually terminates.
         with self._lock:
             targets=[ws for ws,did in self.connections.items() if did==device_id]
-        dead=[]
         for ws in targets:
-            try:await self.send(ws,message)
-            except Exception:dead.append(ws)
-        for ws in dead:self.disconnect(ws)
+            try:
+                await self.send(ws,message)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "WebSocket notification failed for device %s; preserving connection until receive loop closes",
+                    device_id, exc_info=True
+                )
     async def broadcast(self,message):
+        # Do not delete a live phone from the device list because a concurrent
+        # broadcast raced with another websocket write. Connection cleanup is
+        # centralized in websocket_endpoint's finally block.
         with self._lock:
             targets=list(self.connections)
-        dead=[]
         for ws in targets:
-            try:await self.send(ws,message)
-            except Exception:dead.append(ws)
-        for ws in dead:self.disconnect(ws)
+            try:
+                await self.send(ws,message)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "WebSocket broadcast failed; preserving connection until receive loop closes",
+                    exc_info=True
+                )
 manager=ConnectionManager()
 def list_dir(path,source,device_id):
     if not path.exists():return []
