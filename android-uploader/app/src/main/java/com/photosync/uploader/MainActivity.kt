@@ -1075,11 +1075,24 @@ class MainActivity : AppCompatActivity() {
                             ?.progress = percent
                     }
                 }
-                val request = requestBuilder(
-                    "$serverUrl/upload-stream?source=app&filename=${URLEncoder.encode(originalName, "UTF-8")}"
-                ).post(body).build()
+                // Use the same multipart /upload contract as the known-good
+                // PC-server branch. The raw streaming endpoint is retained on
+                // the backend for other clients, but Android sends a multipart
+                // request so filename, MIME type and device identity are explicit.
+                val multipart = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", originalName, body)
+                    .addFormDataPart("source", "app")
+                    .addFormDataPart("device_id", deviceIdentity.id)
+                    .build()
+                val request = requestBuilder("$serverUrl/upload")
+                    .post(multipart)
+                    .build()
                 client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    if (!response.isSuccessful) {
+                        val detail = response.body?.string().orEmpty().take(500)
+                        error("HTTP ${response.code}${if (detail.isBlank()) "" else ": $detail"}")
+                    }
                 }
                 runOnUiThread {
                     removeProgressRow(progressKey)
